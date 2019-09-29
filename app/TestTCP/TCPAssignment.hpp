@@ -38,12 +38,13 @@ public:
 	class Socket_info {
 		public:
 			int domain;
-			struct sockaddr* addr;
+			struct sockaddr_in* addr;
+			struct sockaddr* addr2;
 			socklen_t len;
+			bool socket_bound;
 	};
 	std::map<int, Socket_info *> fd_socket_map;
-	std::set<uint16_t> port_set;
-	std::map<uint16_t, std::set<uint32_t>> port_ipset_map;
+	std::map<uint16_t, std::set<uint32_t>> port_ip_map;
 protected:
 	virtual void systemCallback(UUID syscallUUID, int pid, const SystemCallParameter& param) final;
 	virtual void packetArrived(std::string fromModule, Packet* packet) final;

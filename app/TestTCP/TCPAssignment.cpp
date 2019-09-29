@@ -68,6 +68,7 @@ void TCPAssignment::systemCallback(UUID syscallUUID, int pid, const SystemCallPa
 			//TODO: add information about socket to global data structures for future sys calls
 			auto sckt_info = new Socket_info;
 			sckt_info->domain = param.param1_int;
+			sckt_info->socket_bound = false;
 			this->fd_socket_map[fd] = sckt_info;
 		} else {
 			this->returnSystemCall(syscallUUID, -1); //TODO: make normal error handling EMFILE
@@ -82,6 +83,24 @@ void TCPAssignment::systemCallback(UUID syscallUUID, int pid, const SystemCallPa
 			printf("problem while creating socket");
 			this->returnSystemCall(syscallUUID, -1);
 		}
+		
+		auto fpv = this->fd_socket_map.find(param.param1_int);
+		if(fpv != this->fd_socket_map.end()){
+			auto sckt_info = fpv->second;
+			if(sckt_info->socket_bound == true){
+				struct sockaddr_in *addr = sckt_info->addr;
+				uint16_t port = ntohs(addr->sin_port);
+				uint32_t ip = ntohl(addr->sin_addr.s_addr);
+				auto tpl = this->port_ip_map.find(port);
+				if (tpl != this->port_ip_map.end()) { //port exists in map
+					port_ip_map[port].erase(ip);
+					if(port_ip_map[port].empty()){//if there's no ip in set, remove port
+						port_ip_map.erase(port);
+					}
+				}
+			}
+		}
+		fd_socket_map.erase(param.param1_int);
 		//when success
 		this->removeFileDescriptor(pid, param.param1_int);//close the fd with pid and fd value
 		this->returnSystemCall(syscallUUID, param.param1_int);
@@ -113,23 +132,28 @@ void TCPAssignment::systemCallback(UUID syscallUUID, int pid, const SystemCallPa
 		auto tpl = this->fd_socket_map.find(param.param1_int);
 		if (tpl != this->fd_socket_map.end()) {
 			auto sckt_info = tpl->second; 
+			if (sckt_info->socket_bound) {
+				this->returnSystemCall(syscallUUID, -1); //EINVAL
+			}
 			struct sockaddr_in *addr = static_cast<struct sockaddr_in *>(param.param2_ptr);
 			uint16_t port = ntohs(addr->sin_port);
 			uint32_t ip = ntohl(addr->sin_addr.s_addr);
-			auto prt = this->port_set.find(port);
-			bool ip_set_non_empty = !port_ipset_map[port].empty();
-			bool addr_any = (ip_set_non_empty && (ip == INADDR_ANY));
-			bool ip_in_use = (this->port_ipset_map[port].find(ip) != this->port_ipset_map[port].end());
-			bool any_ip_in_use = (this->port_ipset_map[port].find(INADDR_ANY) != this->port_ipset_map[port].end());
-			bool addr_in_use = ( (prt != this->port_set.end()) && (ip_in_use || any_ip_in_use || addr_any) );
-			if (addr_in_use) { 
-				this->returnSystemCall(syscallUUID, -1); //EADDRINUSE
-			} else {
-				this->port_set.insert(port);
-				this->port_ipset_map[port].insert(ip);
+			auto tpl = this->port_ip_map.find(port);
+			if (tpl != this->port_ip_map.end()) { //port exists in map
+				if ((ip == INADDR_ANY) && (!port_ip_map[port].empty())) {
+					this->returnSystemCall(syscallUUID, -1); //EADDRINUSE error
+				} else if (port_ip_map[port].find(INADDR_ANY) != port_ip_map[port].end()) { //at this moment we check whether INADDR_ANY is in set
+					this->returnSystemCall(syscallUUID, -1); //EADDRINUSE error
+				}
+				// at this point there should be no overlap, so add ip to the set of that port
+				port_ip_map[port].insert(ip);
+			} else { //port is not in the map, then no overlap
+				port_ip_map.insert(std::pair<uint16_t, std::set<uint32_t>>(port, {ip}));
 			}
-			sckt_info->addr = static_cast<struct sockaddr *>(param.param2_ptr);
+			sckt_info->addr = static_cast<struct sockaddr_in *>(param.param2_ptr);
+			sckt_info->addr2 = static_cast<struct sockaddr *>(param.param2_ptr);
 			sckt_info->len = param.param3_int;
+			sckt_info->socket_bound = true;
 		} else {
 			//failure
 			this->returnSystemCall(syscallUUID, -1); //EBADF error
@@ -147,9 +171,10 @@ void TCPAssignment::systemCallback(UUID syscallUUID, int pid, const SystemCallPa
 		if(fpv != this->fd_socket_map.end()){
 			auto sckt_info = fpv->second;
 			for(int i=0;i<14;i++){
-				static_cast<struct sockaddr *>(param.param2_ptr)->sa_data[i] = sckt_info->addr->sa_data[i];
+				static_cast<struct sockaddr *>(param.param2_ptr)->sa_data[i] = sckt_info->addr2->sa_data[i];
 			}
-			static_cast<struct sockaddr *>(param.param2_ptr)->sa_family = sckt_info->addr->sa_family;
+			static_cast<struct sockaddr *>(param.param2_ptr)->sa_family = sckt_info->addr2->sa_family;
+			
 			*static_cast<socklen_t*>(param.param3_ptr) = sckt_info->len;
 		}else{
 			//failure
