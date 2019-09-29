@@ -29,11 +29,21 @@ private:
 private:
 	virtual void timerCallback(void* payload) final;
 
+	
 public:
 	TCPAssignment(Host* host);
 	virtual void initialize();
 	virtual void finalize();
 	virtual ~TCPAssignment();
+	class Socket_info {
+		public:
+			int domain;
+			struct sockaddr* addr;
+			socklen_t len;
+	};
+	std::map<int, Socket_info *> fd_socket_map;
+	std::set<uint16_t> port_set;
+	std::map<uint16_t, std::set<uint32_t>> port_ipset_map;
 protected:
 	virtual void systemCallback(UUID syscallUUID, int pid, const SystemCallParameter& param) final;
 	virtual void packetArrived(std::string fromModule, Packet* packet) final;
