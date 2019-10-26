@@ -35,13 +35,49 @@ public:
 	virtual void initialize();
 	virtual void finalize();
 	virtual ~TCPAssignment();
+	enum sct_state{
+		//client
+		SYN_SENT,
+
+		//server
+		PASSIVE_SCKT
+	};
+
+	struct Info_list {
+		uint32_t l_ip;
+		uint16_t l_port;
+		uint32_t ip;
+		uint16_t port;
+	};
+
+	struct Listen_info {
+		//might need to store sockaddr
+		int backlog;
+		int pid;
+		UUID syscallUUID;
+		//SYN queue  state SYN RECEIVED pending
+		int pend_num;
+		Info_list *syn_queue; 
+		//Accept queue state ESTABLISHED, it's when ACK packet in 3 way handshake received waiting
+		int wait_num;
+		Info_list *est_queue; 
+	};
+
 	class Socket_info {
 		public:
 			int domain;
+			int pid;
+			uint32_t sequence_num;
+			struct sockaddr_in* remote_addr;
 			struct sockaddr_in* addr;
 			struct sockaddr* addr2;
+			struct sockaddr* addr_peer;
 			socklen_t len;
+			socklen_t len_peer;
 			bool socket_bound;
+			UUID syscallUUID;
+			sct_state state;
+			struct Listen_info* listen_info;
 	};
 	std::map<int, Socket_info *> fd_socket_map;
 	std::map<uint16_t, std::set<uint32_t>> port_ip_map;

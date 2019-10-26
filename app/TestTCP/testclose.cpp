@@ -134,7 +134,7 @@ protected:
 		struct timeval tv;
 		ret = gettimeofday(&tv, 0);
 		EXPECT_EQ(ret, 0);
-
+		
 		long sleep_time = close_time - (1000*1000*tv.tv_sec) - tv.tv_usec;
 		EXPECT_GE(sleep_time, 0);
 		//printf("connect sleep: %ld\n", sleep_time);
