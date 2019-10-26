@@ -48,6 +48,8 @@ public:
 		uint16_t l_port;
 		uint32_t ip;
 		uint16_t port;
+		sct_state state;
+		Info_list *next;
 	};
 
 	struct Listen_info {
@@ -55,6 +57,8 @@ public:
 		int backlog;
 		int pid;
 		UUID syscallUUID;
+		struct sockaddr_in* sockaddr;		
+		socklen_t *socklen;	
 		//SYN queue  state SYN RECEIVED pending
 		int pend_num;
 		Info_list *syn_queue; 
@@ -67,7 +71,7 @@ public:
 		public:
 			int domain;
 			int pid;
-			uint32_t sequence_num;
+			// uint32_t sequence_num;
 			struct sockaddr_in* remote_addr;
 			struct sockaddr_in* addr;
 			struct sockaddr* addr2;

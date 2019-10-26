@@ -92,31 +92,22 @@ void TCPAssignment::systemCallback(UUID syscallUUID, int pid, const SystemCallPa
 			if(sckt_info->socket_bound == true){
 				//close->send packet Finbit =1 and get answer
  				//after opponent send Findbit, wait some time, and it will be closed
-				Packet* closepacket = allocatePacket(54);
-				//Ethernet Frame
-				//closepacket->writeData(0,  ,6);
-				//closepacket->writeData(6,  ,6);
-				uint8_t v[2] = {8, 0}; // ipv4
-				closepacket->writeData(12, v ,2);
-				//IP header
-				uint8_t length[1] = {65}; // ipv4, header length = 20}
-				closepacket->writeData(14, length ,1);
-
-				uint8_t frag[2] = {4, 0}; //can't fragmentation
-				closepacket->writeData(20, frag ,2);		
-
-				uint8_t t[1] = {6}; //tcp
-				closepacket->writeData(23, t ,1);
 				/*
-				uint8_t sourceip[4] = ntohl(sckt_info->addr->sin_addr.s_addr); //sourceip
-				closepacket->writeData(26, sourceip ,4);
-				uint8_t destip[4] = ntohl(sckt_info->remote_addr->sin_addr.s_addr); //destinationip
-				closepacket->writeData(30, destip ,4);
-				//TCP HEADER
-				uint8_t sourceport[2] = ntohs(sckt_info->addr->sin_port); //sourceport
-				closepacket->writeData(34, sourceport ,2);
-				uint8_t destport[2] = ntohs(sckt_info->remote_addr->sin_port); //destinationip
-				closepacket->writeData(36, destport ,2);
+				Packet* closepacket = allocatePacket(54);
+				
+				uint32_t sourceip = htonl(sckt_info->addr->sin_addr.s_addr); //sourceip
+				closepacket->writeData(26, &sourceip ,4);
+				uint32_t destip = htonl(sckt_info->remote_addr->sin_addr.s_addr); //destinationip
+				closepacket->writeData(30, &destip ,4);
+		
+				uint16_t sourceport = htons(sckt_info->addr->sin_port); //sourceport
+				closepacket->writeData(34, &sourceport ,2);
+				uint16_t destport = htons(sckt_info->remote_addr->sin_port); //destinationip
+				closepacket->writeData(36, &destport ,2);
+				
+
+				uint8_t flag[2] = {80, 1};//length is 20, fin = 1
+				closepacket->writeData(46, flag, 2);
 				*/
 				struct sockaddr_in *addr = sckt_info->addr;
 				uint16_t port = ntohs(addr->sin_port);
@@ -208,13 +199,13 @@ void TCPAssignment::systemCallback(UUID syscallUUID, int pid, const SystemCallPa
 				uint16_t r_port = htons(socket->remote_addr->sin_port);
 				uint32_t l_ip = htonl(socket->addr->sin_addr.s_addr);
 				uint32_t r_ip = htonl(socket->remote_addr->sin_addr.s_addr);
-				uint32_t seq_n = htonl(socket->sequence_num);
+				// uint32_t seq_n = htonl(socket->sequence_num);
 				// local port first
 				memcpy(hdr, &l_port, 2); //uint16_t
 				// remote port
 				memcpy(hdr + 2, &r_port, 2); //uint16_t
-				// sequence number
-				memcpy(hdr + 4, &seq_n, 4); //uint32_t
+				// // sequence number
+				// memcpy(hdr + 4, &seq_n, 4); //uint32_t
 				// // acknowledgment number 
 				// memcpy(hdr + 8, htonl(0), 4); //uint32_t
 				// flags
@@ -231,7 +222,7 @@ void TCPAssignment::systemCallback(UUID syscallUUID, int pid, const SystemCallPa
 				pckt->writeData(30, &r_ip, 4); //remote ip
 				pckt->writeData(34, hdr, 20); //header
 				this->sendPacket("IPv4", pckt);
-				socket->sequence_num += 1;
+				// socket->sequence_num += 1;
 			}
 		}
 		// such socket doesn't exist
@@ -273,6 +264,57 @@ void TCPAssignment::systemCallback(UUID syscallUUID, int pid, const SystemCallPa
 		//this->syscall_accept(syscallUUID, pid, param.param1_int,
 		//		static_cast<struct sockaddr*>(param.param2_ptr),
 		//		static_cast<socklen_t*>(param.param3_ptr));
+		for (auto tpl = fd_socket_map.begin(); tpl != fd_socket_map.end(); tpl++){
+			// checking if such socket exists
+			if (tpl->first == param.param1_int && tpl->second->pid == pid){ //checking for fd and pid
+				Socket_info *socket = tpl->second;
+				if (!(socket->state == PASSIVE_SCKT)) {
+					// Socket is not a listening one
+					returnSystemCall(syscallUUID, -1);
+					return;
+				}
+
+				if (socket->listen_info->wait_num == 0) {
+					// no waiting sockets
+					socket->listen_info->pid = pid;
+					socket->listen_info->syscallUUID = syscallUUID;
+					socket->listen_info->sockaddr = static_cast<struct sockaddr_in*>(param.param2_ptr);
+					socket->listen_info->socklen = static_cast<socklen_t*>(param.param3_ptr);
+				} else {
+					// handle waiting sockets
+					// get next pending in queue, create new socket 
+					int fd;
+					if ((fd = this->createFileDescriptor(pid)) != -1) {
+						auto socket = new Socket_info;
+						struct Info_list *est_queue_el = socket->listen_info->est_queue; // need to check is struct is copied here or passed by reference
+						socket->listen_info->est_queue = socket->listen_info->est_queue->next;
+						socket->listen_info->wait_num -= 1;
+						struct sockaddr_in saddr;
+						saddr.sin_addr.s_addr = htonl(est_queue_el->ip);
+						saddr.sin_port = htons(est_queue_el->port);
+						socket->remote_addr = static_cast<struct sockaddr_in *> (&saddr);
+						struct sockaddr_in laddr;
+						laddr.sin_addr.s_addr = htonl(est_queue_el->l_ip);
+						laddr.sin_port = htons(est_queue_el->l_port);
+						socket->addr = static_cast<struct sockaddr_in *> (&laddr);
+						socket->state = est_queue_el->state;
+						socket->socket_bound = true;
+						socket->pid = pid;
+						this->fd_socket_map[fd] = socket;
+						free(est_queue_el);
+					} else {
+						this->returnSystemCall(syscallUUID, -1); //TODO: make normal error handling EMFILE
+						return;
+					}
+					//success
+					returnSystemCall(syscallUUID, fd);
+					return;
+				}
+			}
+		}
+		// such socket doesn't exist
+		returnSystemCall(syscallUUID, -1);
+		return;
 		break;
 	}
 	case BIND:{
@@ -366,14 +408,38 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 {
 	//should handle following cases
 	//Wrong Checksum
-	// SYN:  clinet:SYNACK, server: SYN
+	// SYN:  client:SYNACK, server: SYN
 	// FIN 
 	// ACK
+	uint16_t flag;
+	packet->readData(46, &flag, 2);
+	int Fin = flag%2;
+	int Syn = (flag/2)%2;
+	int ack = (flag/16)%2;
+
+	uint8_t src_ip[4];
+	uint8_t dest_ip[4];
+	packet->readData(26, src_ip, 4);
+	packet->readData(30, dest_ip, 4);
+
+	uint16_t sn;
+	packet->readData(38, &sn, 2);
+	sn = sn+1;//sequence number+1
+	Packet* myPacket = this->clonePacket(packet);
+	myPacket->writeData(26, dest_ip, 4);
+	myPacket->writeData(30, src_ip, 4);//change the destination and source ip
+	myPacket->writeData(40, &sn, 2);//give the value to ack that sn+1
+	
+
+	
+
+
+
 }
 
 void TCPAssignment::timerCallback(void* payload)
 {
-
+	
 }
 
 
