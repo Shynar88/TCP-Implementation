@@ -69,6 +69,7 @@ void TCPAssignment::systemCallback(UUID syscallUUID, int pid, const SystemCallPa
 			auto sckt_info = new Socket_info;
 			sckt_info->domain = param.param1_int;
 			sckt_info->socket_bound = false;
+			sckt_info->socket_connected = false;
 			sckt_info->pid = pid;
 			this->fd_socket_map[fd] = sckt_info;
 		} else {
@@ -90,25 +91,28 @@ void TCPAssignment::systemCallback(UUID syscallUUID, int pid, const SystemCallPa
 		if(fpv != this->fd_socket_map.end()){
 			auto sckt_info = fpv->second;
 			if(sckt_info->socket_bound == true){
-				//close->send packet Finbit =1 and get answer
- 				//after opponent send Findbit, wait some time, and it will be closed
-				/*
-				Packet* closepacket = allocatePacket(54);
+				if(sckt_info->socket_connected == true){
+					//close->send packet Finbit =1 and get answer
+ 					//after opponent send Findbit, wait some time, and it will be closed
+					
+					Packet* closepacket = allocatePacket(54);
 				
-				uint32_t sourceip = htonl(sckt_info->addr->sin_addr.s_addr); //sourceip
-				closepacket->writeData(26, &sourceip ,4);
-				uint32_t destip = htonl(sckt_info->remote_addr->sin_addr.s_addr); //destinationip
-				closepacket->writeData(30, &destip ,4);
-		
-				uint16_t sourceport = htons(sckt_info->addr->sin_port); //sourceport
-				closepacket->writeData(34, &sourceport ,2);
-				uint16_t destport = htons(sckt_info->remote_addr->sin_port); //destinationip
-				closepacket->writeData(36, &destport ,2);
+					uint32_t sourceip = htonl(sckt_info->addr->sin_addr.s_addr); //sourceip
+					closepacket->writeData(26, &sourceip ,4);
+					uint32_t destip = htonl(sckt_info->remote_addr->sin_addr.s_addr); //destinationip
+					closepacket->writeData(30, &destip ,4);
+
+					uint16_t sourceport = htons(sckt_info->addr->sin_port); //sourceport
+					closepacket->writeData(34, &sourceport ,2);
+					uint16_t destport = htons(sckt_info->remote_addr->sin_port); //destinationip
+					closepacket->writeData(36, &destport ,2);
 				
 
-				uint8_t flag[2] = {80, 1};//length is 20, fin = 1
-				closepacket->writeData(46, flag, 2);
-				*/
+					uint8_t flag[2] = {80, 1};//length is 20, fin = 1
+					closepacket->writeData(46, flag, 2);
+					sendPacket("IPv4", closepacket);
+					NSLEEP;
+				}
 				struct sockaddr_in *addr = sckt_info->addr;
 				uint16_t port = ntohs(addr->sin_port);
 				uint32_t ip = ntohl(addr->sin_addr.s_addr);
@@ -189,6 +193,7 @@ void TCPAssignment::systemCallback(UUID syscallUUID, int pid, const SystemCallPa
 				socket->remote_addr = static_cast<struct sockaddr_in *> (&saddr);
 				socket->addr_peer = static_cast<struct sockaddr *>(param.param2_ptr);
 				socket->len_peer = param.param3_int;
+				socket->socket_connected = true;
 
 				//write packet and send it 
 				Packet *pckt = this->allocatePacket(54); //wireshark showed packet to be of size 54 bytes
@@ -223,11 +228,12 @@ void TCPAssignment::systemCallback(UUID syscallUUID, int pid, const SystemCallPa
 				pckt->writeData(34, hdr, 20); //header
 				this->sendPacket("IPv4", pckt);
 				// socket->sequence_num += 1;
+			} else {
+				// such socket doesn't exist
+				returnSystemCall(syscallUUID, -1);
+				return;
 			}
 		}
-		// such socket doesn't exist
-		returnSystemCall(syscallUUID, -1);
-		return;
 		//1: syscallID, 2: pid, 3: socket file descriptor 4: sockaddr, 5: socklen
 		//this->syscall_connect(syscallUUID, pid, param.param1_int,
 		//		static_cast<struct sockaddr*>(param.param2_ptr), (socklen_t)param.param3_int);
@@ -410,17 +416,255 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 	//Wrong Checksum
 	// SYN:  client:SYNACK, server: SYN
 	// FIN 
-	// ACK
+	// ACK 
 	uint16_t flag;
 	packet->readData(46, &flag, 2);
+	flag = ntohs(flag);
 	int Fin = flag%2;
 	int Syn = (flag/2)%2;
 	int ack = (flag/16)%2;
 
-	uint8_t src_ip[4];
-	uint8_t dest_ip[4];
-	packet->readData(26, src_ip, 4);
-	packet->readData(30, dest_ip, 4);
+	size_t size = packet->getSize() - 34; 
+	uint8_t buffer[size];
+	packet->readData(34, buffer, size);
+
+	uint32_t src_ip_n;
+	uint32_t dest_ip_n;
+	uint16_t src_port_n;
+	uint16_t dest_port_n;
+	packet->readData(26, &src_ip_n, 4);
+	packet->readData(30, &dest_ip_n, 4);
+	packet->readData(34, &src_port_n, 2);
+	packet->readData(36, &dest_port_n, 2);
+	uint32_t src_ip = ntohl(src_ip_n);
+	uint32_t dest_ip = ntohl(dest_ip_n);
+	uint16_t src_port = ntohs(src_port_n);
+	uint16_t dest_port = ntohs(dest_port_n);
+	
+	uint16_t checksum = ~NetworkUtil::tcp_sum(src_ip_n, dest_ip_n, buffer, size);
+	if (htons(checksum) == 0) {
+		//checksum check passed
+		// SYN:  client:SYNACK, server: SYN
+		uint16_t syn = flag & 0x0002;
+		// FIN 
+		uint16_t fin = flag & 0x0001;
+		// ACK
+		uint16_t ack = flag & 0x0010;
+		// FIN
+		if (fin) {
+			//TODO for closing connection
+		}
+
+		// SYN
+		if (syn) {
+			if (ack) {
+				// client receives SYN ACK from server
+				for (auto tpl = fd_socket_map.begin(); tpl != fd_socket_map.end(); tpl++){
+					Socket_info *socket = tpl->second;
+					bool rmt_ip_equal = (socket->remote_addr->sin_addr.s_addr == src_ip_n);
+					bool rmt_port_equal = (socket->remote_addr->sin_port == src_port_n);
+					bool lcl_ip_equal = (socket->addr->sin_addr.s_addr == dest_ip_n);
+					bool lcl_port_equal = (socket->addr->sin_port == dest_port_n);
+					bool state_syn_sent = (socket->state == SYN_SENT);
+					if (socket->socket_bound && rmt_ip_equal && rmt_port_equal && lcl_ip_equal && lcl_port_equal && state_syn_sent){
+						//send ACK to server to indicate that client received server's SYN ACK
+						//write packet and send it 
+						Packet *pckt = this->allocatePacket(54); //wireshark showed packet to be of size 54 bytes
+						//fill the header 
+						uint8_t hdr[20];
+						memset(hdr, 0, 20);
+						// uint32_t seq_n = htonl(socket->sequence_num);
+						// local port first
+						memcpy(hdr, &dest_port_n, 2); //uint16_t
+						// remote port
+						memcpy(hdr + 2, &src_port_n, 2); //uint16_t
+						// // sequence number
+						// memcpy(hdr + 4, &seq_n, 4); //uint32_t
+						// // acknowledgment number 
+						// memcpy(hdr + 8, htonl(0), 4); //uint32_t
+						// flags
+						uint16_t flags = 0x0005;
+						flags <<= 12;
+						flags |= 0x0010; //ACK
+						uint16_t nflags = htons(flags);
+						memcpy(hdr + 12, &nflags, 2); //uint16_t
+						// window field goes here hdr + 14, 2 bytes uint16_t
+						// // checksum
+						// memcpy(hdr + 16, htons(~NetworkUtil::tcp_sum()), 2); //uint16_t
+
+						pckt->writeData(26, &dest_ip_n, 4); //local ip
+						pckt->writeData(30, &src_ip_n, 4); //remote ip
+						pckt->writeData(34, hdr, 20); //header
+						this->sendPacket("IPv4", pckt);
+						this->freePacket(pckt);
+						socket->state = EST;
+						socket->is_connected = true;
+						//on success
+						returnSystemCall(socket->syscallUUID, 0);
+						return;
+					}
+					if (socket->socket_bound && rmt_ip_equal && rmt_port_equal && lcl_ip_equal && lcl_port_equal){ 
+						//send ACK to server to indicate that client received server's SYN ACK, but client already is not in SYN SENT state
+						//write packet and send it 
+						Packet *pckt = this->allocatePacket(54); //wireshark showed packet to be of size 54 bytes
+						//fill the header 
+						uint8_t hdr[20];
+						memset(hdr, 0, 20);
+						// uint32_t seq_n = htonl(socket->sequence_num);
+						// local port first
+						memcpy(hdr, &dest_port_n, 2); //uint16_t
+						// remote port
+						memcpy(hdr + 2, &src_port_n, 2); //uint16_t
+						// // sequence number
+						// memcpy(hdr + 4, &seq_n, 4); //uint32_t
+						// // acknowledgment number 
+						// memcpy(hdr + 8, htonl(0), 4); //uint32_t
+						// flags
+						uint16_t flags = 0x0005;
+						flags <<= 12;
+						flags |= 0x0010; //ACK
+						uint16_t nflags = htons(flags);
+						memcpy(hdr + 12, &nflags, 2); //uint16_t
+						// window field goes here hdr + 14, 2 bytes uint16_t
+						// // checksum
+						// memcpy(hdr + 16, htons(~NetworkUtil::tcp_sum()), 2); //uint16_t
+
+						pckt->writeData(26, &dest_ip_n, 4); //local ip
+						pckt->writeData(30, &src_ip_n, 4); //remote ip
+						pckt->writeData(34, hdr, 20); //header
+						this->sendPacket("IPv4", pckt);
+						this->freePacket(pckt);
+					}
+				}
+
+				this->freePacket(packet);
+				return;
+			} else {
+				// SYN for server, means opening connection, should respond with syn ack if possible 
+				for (auto tpl = fd_socket_map.begin(); tpl != fd_socket_map.end(); tpl++){
+					Socket_info *socket = tpl->second;
+					if (!(socket->state == PASSIVE_SCKT)) {
+						//do nothing for not listening socket
+					} else {
+						//listening socket
+						bool lcl_ip_equal_or_inaddr = ((socket->addr->sin_addr.s_addr == dest_ip_n) || (socket->addr->sin_addr.s_addr == htonl(INADDR_ANY)));
+						bool lcl_port_equal = (socket->addr->sin_port == dest_port_n);
+						if (socket->socket_bound && lcl_ip_equal_or_inaddr && lcl_port_equal) {
+							//if number of pending bigger than backlog, drop packet
+							bool queue_full = (socket->listen_info->backlog <= socket->listen_info->pend_num);
+							if (queue_full) {
+								this->freePacket(packet);
+								return; 
+							}
+							//check if already in pending list by list el ip == src_ip  el port == src_port. If it is, send synack again
+							struct Info_list *list_elem;
+							for (list_elem = socket->listen_info->syn_queue; list_elem != NULL; list_elem = list_elem->next) {
+								bool ip_equal = (list_elem->ip == src_ip);
+								bool port_equal = (list_elem->port == src_port);
+								bool is_pending = (ip_equal && port_equal);
+								if (is_pending) {
+									//send packet 
+									//write packet and send it 
+									Packet *pckt = this->allocatePacket(54); //wireshark showed packet to be of size 54 bytes
+									//fill the header 
+									uint8_t hdr[20];
+									memset(hdr, 0, 20);
+									// uint32_t seq_n = htonl(socket->sequence_num);
+									// local port first
+									memcpy(hdr, &dest_port_n, 2); //uint16_t
+									// remote port
+									memcpy(hdr + 2, &src_port_n, 2); //uint16_t
+									// // sequence number
+									// memcpy(hdr + 4, &seq_n, 4); //uint32_t
+									// // acknowledgment number 
+									// memcpy(hdr + 8, htonl(0), 4); //uint32_t
+									// flags
+									uint16_t flags = 0x0005;
+									flags <<= 12;
+									flags |= 0x0002; //SYN
+									flags |= 0x0010; //ACK
+									uint16_t nflags = htons(flags);
+									memcpy(hdr + 12, &nflags, 2); //uint16_t
+									// window field goes here hdr + 14, 2 bytes uint16_t
+									// // checksum
+									// memcpy(hdr + 16, htons(~NetworkUtil::tcp_sum()), 2); //uint16_t
+
+									pckt->writeData(26, &dest_ip_n, 4); //local ip
+									pckt->writeData(30, &src_ip_n, 4); //remote ip
+									pckt->writeData(34, hdr, 20); //header
+									this->sendPacket("IPv4", pckt);
+									this->freePacket(pckt);
+								}
+							} 
+							//not pending yet
+							struct Info_list * l_info = (struct Info_list *) calloc(1, sizeof(struct Info_list));
+							if (!(l_info)) {
+								//calloc failed
+								this->freePacket(packet);
+								return;
+							}
+							//fill in listen_info
+							l_info->ip = src_ip;
+							l_info->port = src_port;
+							l_info->l_ip = dest_ip;
+							l_info->l_port = dest_port;
+							l_info->state = SYN_RECEIVED;
+							l_info->next = socket->listen_info->syn_queue;
+							socket->listen_info->syn_queue = l_info;
+							socket->listen_info->pend_num += 1;
+
+							//send packet 
+							//write packet and send it 
+							Packet *pckt = this->allocatePacket(54); //wireshark showed packet to be of size 54 bytes
+							//fill the header 
+							uint8_t hdr[20];
+							memset(hdr, 0, 20);
+							// uint32_t seq_n = htonl(socket->sequence_num);
+							// local port first
+							memcpy(hdr, &dest_port_n, 2); //uint16_t
+							// remote port
+							memcpy(hdr + 2, &src_port_n, 2); //uint16_t
+							// // sequence number
+							// memcpy(hdr + 4, &seq_n, 4); //uint32_t
+							// // acknowledgment number 
+							// memcpy(hdr + 8, htonl(0), 4); //uint32_t
+							// flags
+							uint16_t flags = 0x0005;
+							flags <<= 12;
+							flags |= 0x0002; //SYN
+							flags |= 0x0010; //ACK
+							uint16_t nflags = htons(flags);
+							memcpy(hdr + 12, &nflags, 2); //uint16_t
+							// window field goes here hdr + 14, 2 bytes uint16_t
+							// // checksum
+							// memcpy(hdr + 16, htons(~NetworkUtil::tcp_sum()), 2); //uint16_t
+
+							pckt->writeData(26, &dest_ip_n, 4); //local ip
+							pckt->writeData(30, &src_ip_n, 4); //remote ip
+							pckt->writeData(34, hdr, 20); //header
+							this->sendPacket("IPv4", pckt);
+							this->freePacket(pckt);
+							return;
+						}
+					}
+				}
+
+				this->freePacket(packet);
+				return;
+			}
+		}
+
+		// ACK
+		if (ack) {
+			//TODO should return returnSystemCall with saved syscallUUID from blocking syscalls
+			// TODO increment waiting sockets stuff
+		}
+
+	} else {
+		//incorrect checksum
+		this->freePacket(packet);
+		return;
+	}
 
 	uint16_t sn;
 	packet->readData(38, &sn, 2);

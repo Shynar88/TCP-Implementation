@@ -37,9 +37,11 @@ public:
 	virtual ~TCPAssignment();
 	enum sct_state{
 		//client
+		EST,
 		SYN_SENT,
 
 		//server
+		SYN_RECEIVED,
 		PASSIVE_SCKT
 	};
 
@@ -79,6 +81,8 @@ public:
 			socklen_t len;
 			socklen_t len_peer;
 			bool socket_bound;
+			bool socket_connected;
+			bool is_connected;
 			UUID syscallUUID;
 			sct_state state;
 			struct Listen_info* listen_info;
