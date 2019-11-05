@@ -658,6 +658,102 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 		if (ack) {
 			//TODO should return returnSystemCall with saved syscallUUID from blocking syscalls
 			// TODO increment waiting sockets stuff
+			uint32_t rcvd_ack;
+			rcvd_ack = ntohl(packet->readData(42, &rcvd_ack, 4));
+			for (auto tpl = fd_socket_map.begin(); tpl != fd_socket_map.end(); tpl++){
+				Socket_info *socket = tpl->second;
+				bool s_l_port_eq_d_port = (socket->addr->sin_port == dest_port_n);
+				bool s_l_ip_eq_d_ip = (socket->addr->sin_addr.s_addr == dest_ip_n || socket->addr->sin_addr.s_addr == htonl(INADDR_ANY));
+				bool s_r_ip_eq_s_ip = (socket->remote_addr->sin_addr.s_addr == src_ip_n);
+				bool s_r_port_eq_s_port = (socket->remote_addr->sin_port == src_port_n);
+				if (s_l_port_eq_d_port && s_l_ip_eq_d_ip && s_r_ip_eq_s_ip && s_r_port_eq_s_port && socket->socket_bound && socket->state == FIN_W_1) {
+					// ACK FIN WAIT 1
+					if (rcvd_ack != socket->latest_expected_ack) {
+						//send packet 
+						//write packet and send it 
+						Packet *pckt = this->allocatePacket(54); //wireshark showed packet to be of size 54 bytes
+						//fill the header 
+						uint8_t hdr[20];
+						memset(hdr, 0, 20);
+						// uint32_t seq_n = htonl(socket->sequence_num);
+						// local port first
+						memcpy(hdr, &socket->addr->sin_port, 2); //uint16_t
+						// remote port
+						memcpy(hdr + 2, &socket->remote_addr->sin_port, 2); //uint16_t
+						// // sequence number, should substract 1!
+						// memcpy(hdr + 4, &seq_n, 4); //uint32_t
+						// // acknowledgment number 
+						// memcpy(hdr + 8, htonl(0), 4); //uint32_t
+						// flags
+						uint16_t flags = 0x0005;
+						flags <<= 12;
+						flags |= 0x0010; //ACK
+						uint16_t nflags = htons(flags);
+						memcpy(hdr + 12, &nflags, 2); //uint16_t
+						// window field goes here hdr + 14, 2 bytes uint16_t
+						// // checksum
+						// memcpy(hdr + 16, htons(~NetworkUtil::tcp_sum()), 2); //uint16_t
+
+						pckt->writeData(26, &dest_ip_n, 4); //local ip
+						pckt->writeData(30, &src_ip_n, 4); //remote ip
+						pckt->writeData(34, hdr, 20); //header
+						this->sendPacket("IPv4", pckt);
+						this->freePacket(pckt);
+						return;
+					} else {
+						// transfer to FIN WAIT 2
+						this->freePacket(packet);
+						socket->state = FIN_W_2;
+						return;
+					}
+				} else if {
+					// ACK last ack
+				} else if {
+					// ack after fin 
+				} else if (socket->socket_bound && socket->state == CLOSING && s_l_port_eq_d_port && s_l_ip_eq_d_ip && s_r_ip_eq_s_ip && s_r_port_eq_s_port){
+					// Closing ACK. CLient received ACK after FIN; change state, send nothing
+					if (rcvd_ack != socket->latest_expected_ack) {
+						//send packet 
+						//write packet and send it 
+						Packet *pckt = this->allocatePacket(54); //wireshark showed packet to be of size 54 bytes
+						//fill the header 
+						uint8_t hdr[20];
+						memset(hdr, 0, 20);
+						// uint32_t seq_n = htonl(socket->sequence_num);
+						// local port first
+						memcpy(hdr, &socket->addr->sin_port, 2); //uint16_t
+						// remote port
+						memcpy(hdr + 2, &socket->remote_addr->sin_port, 2); //uint16_t
+						// // sequence number, should substract 1!
+						// memcpy(hdr + 4, &seq_n, 4); //uint32_t
+						// // acknowledgment number 
+						// memcpy(hdr + 8, htonl(0), 4); //uint32_t
+						// flags
+						uint16_t flags = 0x0005;
+						flags <<= 12;
+						flags |= 0x0010; //ACK
+						uint16_t nflags = htons(flags);
+						memcpy(hdr + 12, &nflags, 2); //uint16_t
+						// window field goes here hdr + 14, 2 bytes uint16_t
+						// // checksum
+						// memcpy(hdr + 16, htons(~NetworkUtil::tcp_sum()), 2); //uint16_t
+
+						pckt->writeData(26, &dest_ip_n, 4); //local ip
+						pckt->writeData(30, &src_ip_n, 4); //remote ip
+						pckt->writeData(34, hdr, 20); //header
+						this->sendPacket("IPv4", pckt);
+						this->freePacket(pckt);
+						return;
+					} else {
+
+					}
+				}
+			}
+			for (auto tpl = fd_socket_map.begin(); tpl != fd_socket_map.end(); tpl++){
+
+			}
+			this->freePacket(packet);
+			return;
 		}
 
 	} else {

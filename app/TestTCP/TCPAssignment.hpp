@@ -39,6 +39,9 @@ public:
 		//client
 		EST,
 		SYN_SENT,
+		FIN_W_1,
+		FIN_W_2,
+		CLOSING,
 
 		//server
 		SYN_RECEIVED,
@@ -84,6 +87,11 @@ public:
 			bool socket_connected;
 			bool is_connected;
 			UUID syscallUUID;
+			uint32_t ack_num;					// from socket
+			uint32_t seq_num;					// from socket, ++ on ACK
+			uint32_t latest_ack_num; 			// socket receives it
+			uint32_t latest_expected_ack;		// FIN's ack num 
+			uint32_t latest_expected_seq_num; // FIN's seq num sent
 			sct_state state;
 			struct Listen_info* listen_info;
 	};
