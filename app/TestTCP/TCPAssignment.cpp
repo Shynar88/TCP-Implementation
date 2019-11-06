@@ -33,7 +33,7 @@ TCPAssignment::~TCPAssignment()
 
 void TCPAssignment::initialize()
 {
-
+	fd_socket_map.clear();
 }
 
 void TCPAssignment::finalize()
@@ -68,7 +68,9 @@ void TCPAssignment::systemCallback(UUID syscallUUID, int pid, const SystemCallPa
 			//TODO: add information about socket to global data structures for future sys calls
 			auto sckt_info = new Socket_info;
 			sckt_info->domain = param.param1_int;
+			sckt_info->socket_listen = false;
 			sckt_info->socket_bound = false;
+			sckt_info->socket_others = false;
 			sckt_info->socket_connected = false;
 			sckt_info->myclose = false;
 			sckt_info->close_return = false;
@@ -95,12 +97,11 @@ void TCPAssignment::systemCallback(UUID syscallUUID, int pid, const SystemCallPa
 		if(fpv != this->fd_socket_map.end()){
 			auto sckt_info = fpv->second;
 			if(sckt_info->socket_bound == true){
-				if(sckt_info->socket_connected == true){
+				if(sckt_info->socket_connected == true || sckt_info->socket_listen == true){
 					//close->send packet Finbit =1 and get answer
  					//after opponent send Findbit, wait some time, and it will be closed
 					
 					Packet* closepacket = allocatePacket(54);
-				
 					uint32_t sourceip = htonl(sckt_info->addr->sin_addr.s_addr); //sourceip
 					closepacket->writeData(26, &sourceip ,4);
 					uint32_t destip = htonl(sckt_info->remote_addr->sin_addr.s_addr); //destinationip
@@ -112,8 +113,24 @@ void TCPAssignment::systemCallback(UUID syscallUUID, int pid, const SystemCallPa
 					closepacket->writeData(36, &destport ,2);
 				
 
-					uint8_t flag[2] = {80, 1};//length is 20, fin = 1
-					closepacket->writeData(46, flag, 2);
+					uint16_t close_flag = 0x0005;
+					close_flag <<= 12;
+					close_flag |= 0x0001; //Fin
+					close_flag = htons(close_flag);
+					closepacket->writeData(46, &close_flag, 2);
+					uint16_t wins = 51200;
+					closepacket->writeData(48, &wins, 2);
+
+
+					size_t size = 20; 
+					uint8_t buffer[size];
+					closepacket->readData(34, buffer, size);
+					uint16_t cs = ~NetworkUtil::tcp_sum(sourceip, destip, buffer, size);
+					cs = htons(cs);
+					closepacket->writeData(50, &cs, 2);
+
+
+
 					sendPacket("IPv4", closepacket);
 					sckt_info->myclose = true;
 					sckt_info->close_pid = pid;
@@ -206,7 +223,8 @@ void TCPAssignment::systemCallback(UUID syscallUUID, int pid, const SystemCallPa
 				struct sockaddr_in saddr;
 				saddr.sin_addr.s_addr = htonl(ip);
 				saddr.sin_port = htons(port);
-				socket->remote_addr = static_cast<struct sockaddr_in *> (&saddr);
+				socket->remote_addr = static_cast<struct sockaddr_in *> (addr_in);
+				printf("second seconda dfa fasdfa %x \n", ntohl(socket->remote_addr->sin_addr.s_addr));
 				socket->addr_peer = static_cast<struct sockaddr *>(param.param2_ptr);
 				socket->len_peer = param.param3_int;
 				socket->socket_connected = true;
@@ -272,6 +290,7 @@ void TCPAssignment::systemCallback(UUID syscallUUID, int pid, const SystemCallPa
 					returnSystemCall(syscallUUID, -1);
 					return;
 				}
+				socket->socket_listen = true;
 				socket->listen_info->backlog = param.param2_int;
 				socket->listen_info->pend_num = 0;
 				socket->listen_info->wait_num = 0;
@@ -286,11 +305,17 @@ void TCPAssignment::systemCallback(UUID syscallUUID, int pid, const SystemCallPa
 		break;
 	}
 	case ACCEPT: {
+
 		//1: syscallUUID, 2: pid, 3: fd, 4: sockaddr, 5: socklen
 		//this->syscall_accept(syscallUUID, pid, param.param1_int,
 		//		static_cast<struct sockaddr*>(param.param2_ptr),
 		//		static_cast<socklen_t*>(param.param3_ptr));
+
+		
+
+
 		for (auto tpl = fd_socket_map.begin(); tpl != fd_socket_map.end(); tpl++){
+			
 			// checking if such socket exists
 			if (tpl->first == param.param1_int && tpl->second->pid == pid){ //checking for fd and pid
 				Socket_info *socket = tpl->second;
@@ -311,25 +336,52 @@ void TCPAssignment::systemCallback(UUID syscallUUID, int pid, const SystemCallPa
 					// get next pending in queue, create new socket 
 					int fd;
 					if ((fd = this->createFileDescriptor(pid)) != -1) {
-						auto socket = new Socket_info;
+						auto new_socket = new Socket_info;
 						struct Info_list *est_queue_el = socket->listen_info->est_queue; // need to check is struct is copied here or passed by reference
 						socket->listen_info->est_queue = socket->listen_info->est_queue->next;
 						socket->listen_info->wait_num -= 1;
 						struct sockaddr_in saddr;
 						saddr.sin_addr.s_addr = htonl(est_queue_el->ip);
 						saddr.sin_port = htons(est_queue_el->port);
-						socket->remote_addr = static_cast<struct sockaddr_in *> (&saddr);
+					
+						saddr.sin_family = AF_INET;
+						new_socket->remote_addr = static_cast<struct sockaddr_in *> (&saddr);
+
+
+						
+						
+						
+				
+						new_socket->addr_peer = (struct sockaddr *)&saddr;
+						
+					
+
+
 						struct sockaddr_in laddr;
 						laddr.sin_addr.s_addr = htonl(est_queue_el->l_ip);
 						laddr.sin_port = htons(est_queue_el->l_port);
-						socket->addr = static_cast<struct sockaddr_in *> (&laddr);
-						socket->state = est_queue_el->state;
-						socket->socket_bound = true;
-						socket->pid = pid;
-						socket->ack_num = est_queue_el->ack_num;
-						socket->seq_num = est_queue_el->seq_num;
-						socket->latest_ack_num = est_queue_el->seq_num;
-						this->fd_socket_map[fd] = socket;
+						laddr.sin_family = AF_INET;
+						new_socket->addr = static_cast<struct sockaddr_in *> (&laddr);
+						new_socket->ipipip = htonl(est_queue_el->l_ip);
+						new_socket->ptptpt = htons(est_queue_el->l_port);
+					
+						new_socket->socket_others = true;
+						socket->remote_addr = static_cast<struct sockaddr_in *> (&laddr);
+						new_socket->addr2 = (struct sockaddr *)&laddr;
+						static_cast<struct sockaddr_in*>(param.param2_ptr)->sin_family = AF_INET;
+						static_cast<struct sockaddr_in*>(param.param2_ptr)->sin_addr.s_addr = laddr.sin_addr.s_addr;
+						static_cast<struct sockaddr_in*>(param.param2_ptr)->sin_port = laddr.sin_port;
+						
+
+
+						new_socket->state = est_queue_el->state;
+						new_socket->socket_bound = true;
+						new_socket->pid = pid;
+						new_socket->ack_num = est_queue_el->ack_num;
+						new_socket->seq_num = est_queue_el->seq_num;
+						new_socket->latest_ack_num = est_queue_el->seq_num;
+						this->fd_socket_map[fd] = new_socket;
+					
 						free(est_queue_el);
 					} else {
 						this->returnSystemCall(syscallUUID, -1); //TODO: make normal error handling EMFILE
@@ -390,14 +442,35 @@ void TCPAssignment::systemCallback(UUID syscallUUID, int pid, const SystemCallPa
 	}
 	case GETSOCKNAME:{
 		
+		
 		auto fpv = this->fd_socket_map.find(param.param1_int);
 		if(fpv != this->fd_socket_map.end()){
 			auto sckt_info = fpv->second;
+			if(sckt_info->socket_others){
+				
+				static_cast<struct sockaddr_in *>(param.param2_ptr)->sin_family = AF_INET;
+
+				
+				static_cast<struct sockaddr_in *>(param.param2_ptr)->sin_port = sckt_info->ptptpt;
+		
+				static_cast<struct sockaddr_in *>(param.param2_ptr)->sin_addr.s_addr = ntohl(sckt_info->ipipip);
+	
+
+			}
+			else{
+				static_cast<struct sockaddr_in *>(param.param2_ptr)->sin_family = sckt_info->addr->sin_family;
+
+				static_cast<struct sockaddr_in *>(param.param2_ptr)->sin_port = sckt_info->addr->sin_port;
+
+				static_cast<struct sockaddr_in *>(param.param2_ptr)->sin_addr.s_addr = sckt_info->addr->sin_addr.s_addr;
+
+			}
+			/*
 			for(int i=0;i<14;i++){
 				static_cast<struct sockaddr *>(param.param2_ptr)->sa_data[i] = sckt_info->addr2->sa_data[i];
 			}
 			static_cast<struct sockaddr *>(param.param2_ptr)->sa_family = sckt_info->addr2->sa_family;
-			
+			*/
 			*static_cast<socklen_t*>(param.param3_ptr) = sckt_info->len;
 		}else{
 			//failure
@@ -420,15 +493,23 @@ void TCPAssignment::systemCallback(UUID syscallUUID, int pid, const SystemCallPa
 		auto fpv = this->fd_socket_map.find(param.param1_int);
 		if(fpv != this->fd_socket_map.end()){
 			auto sckt_info = fpv->second;
-			for(int i=0;i<14;i++){
-				static_cast<struct sockaddr *>(param.param2_ptr)->sa_data[i] = sckt_info->addr_peer->sa_data[i];
+			if(sckt_info->socket_bound){
+				
+				for(int i=0;i<14;i++){
+					static_cast<struct sockaddr *>(param.param2_ptr)->sa_data[i] = sckt_info->addr_peer->sa_data[i];
+				}
+				static_cast<struct sockaddr *>(param.param2_ptr)->sa_family = sckt_info->addr_peer->sa_family;
+				
+				*static_cast<socklen_t*>(param.param3_ptr) = sckt_info->len_peer;
+				this->returnSystemCall(syscallUUID, 0);
 			}
-			static_cast<struct sockaddr *>(param.param2_ptr)->sa_family = sckt_info->addr_peer->sa_family;
-			
-			*static_cast<socklen_t*>(param.param3_ptr) = sckt_info->len_peer;
+			else{
+				returnSystemCall(syscallUUID, -1);
+
+			}
 		}
 
-		this->returnSystemCall(syscallUUID, 0);
+		
 		break;
 	}
 	default:
@@ -446,9 +527,6 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 	uint16_t flag;
 	packet->readData(46, &flag, 2);
 	flag = ntohs(flag);
-	int Fin = flag%2;
-	int Syn = (flag/2)%2;
-	int Ack = (flag/16)%2;
 
 	size_t size = packet->getSize() - 34; 
 	uint8_t buffer[size];
@@ -484,23 +562,29 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 				if(socket->socket_bound){
 					//bool rmt_ip_equal = (socket->remote_addr->sin_addr.s_addr == src_ip_n);
 					//bool rmt_port_equal = (socket->remote_addr->sin_port == src_port_n);
-					bool lcl_ip_equal = (socket->addr->sin_addr.s_addr == dest_ip_n);
+					bool lcl_ip_equal = (socket->addr->sin_addr.s_addr == dest_ip_n || socket->addr->sin_addr.s_addr == htonl(INADDR_ANY));
 					bool lcl_port_equal = (socket->addr->sin_port == dest_port_n);
 					if (lcl_ip_equal && lcl_port_equal){
 						//send ACK to server to indicate that client received server's SYN ACK
 						//write packet and send it 
 						Packet *pckt = this->allocatePacket(54); //wireshark showed packet to be of size 54 bytes
 						
-						pckt->readData(26, &dest_ip_n, 4);
-						pckt->readData(30, &src_ip_n, 4);
-						pckt->readData(34, &dest_port_n, 2);
-						pckt->readData(36, &src_ip_n, 2);
+						pckt->writeData(30, &src_ip_n, 4);
+						pckt->writeData(26, &dest_ip_n, 4);
+						pckt->writeData(36, &src_port_n, 2);
+						pckt->writeData(34, &dest_port_n, 2);
+
 
 						uint16_t close_flag = 0x0005;
 						close_flag <<= 12;
 						close_flag |= 0x0010; //ACK
 						close_flag = htons(close_flag);
 						pckt->writeData(46, &close_flag, 2);
+
+						uint16_t wins = 51200;
+						pckt->writeData(48, &wins, 2);
+
+
 						size_t size = 20; 
 						uint8_t buffer[size];
 						pckt->readData(34, buffer, size);
@@ -570,10 +654,12 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 						flags <<= 12;
 						flags |= 0x0010; //ACK
 						uint32_t rcvd_ack_num;
-						rcvd_ack_num = ntohl(packet->readData(42, &rcvd_ack_num, 4));
+						packet->readData(42, &rcvd_ack_num, 4);
+						rcvd_ack_num = ntohl(rcvd_ack_num);
 						socket->latest_ack_num = rcvd_ack_num;
 						uint32_t ack_num;
-						ack_num = ntohl(packet->readData(38, &ack_num, 4)) + 1;
+						packet->readData(38, &ack_num, 4);
+						ack_num = ntohl(ack_num) + 1;
 						socket->ack_num = ack_num;
 						write_packet(pckt, dest_ip_n, dest_port_n, src_ip_n, src_port_n, socket->seq_num, socket->ack_num, flags, 51200);
 						// //fill the header 
@@ -614,7 +700,9 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 						flags <<= 12;
 						flags |= 0x0010; //ACK
 						uint32_t rcvd_ack_num;
-						rcvd_ack_num = ntohl(packet->readData(38, &rcvd_ack_num, 4)) + 1;
+						packet->readData(38, &rcvd_ack_num, 4);
+						rcvd_ack_num = ntohl(rcvd_ack_num) + 1;
+
 						write_packet(pckt, dest_ip_n, dest_port_n, src_ip_n, src_port_n, socket->seq_num, rcvd_ack_num, flags, 51200);
 						// //fill the header 
 						// uint8_t hdr[20];
@@ -681,28 +769,7 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 									flags |= 0x0002; //SYN
 									flags |= 0x0010; //ACK
 									write_packet(pckt, dest_ip_n, dest_port_n, src_ip_n, src_port_n, list_elem->seq_num - 1, list_elem->ack_num, flags, 51200);
-									// //fill the header 
-									// uint8_t hdr[20];
-									// memset(hdr, 0, 20);
-									// // uint32_t seq_n = htonl(socket->sequence_num);
-									// // local port first
-									// memcpy(hdr, &dest_port_n, 2); //uint16_t
-									// // remote port
-									// memcpy(hdr + 2, &src_port_n, 2); //uint16_t
-									// // // sequence number
-									// // memcpy(hdr + 4, &seq_n, 4); //uint32_t
-									// // // acknowledgment number 
-									// // memcpy(hdr + 8, htonl(0), 4); //uint32_t
-		
-									// uint16_t nflags = htons(flags);
-									// memcpy(hdr + 12, &nflags, 2); //uint16_t
-									// // window field goes here hdr + 14, 2 bytes uint16_t
-									// // // checksum
-									// // memcpy(hdr + 16, htons(~NetworkUtil::tcp_sum()), 2); //uint16_t
-
-									// pckt->writeData(26, &dest_ip_n, 4); //local ip
-									// pckt->writeData(30, &src_ip_n, 4); //remote ip
-									// pckt->writeData(34, hdr, 20); //header
+						
 									this->sendPacket("IPv4", pckt);
 									this->freePacket(packet);
 									return;
@@ -734,53 +801,10 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 							flags |= 0x0002; //SYN
 							flags |= 0x0010; //ACK
 							uint32_t rcvd_ack_num;
-							rcvd_ack_num = ntohl(packet->readData(38, &rcvd_ack_num, 4)) + 1;
+							packet->readData(38, &rcvd_ack_num, 4);
+							rcvd_ack_num = ntohl(rcvd_ack_num)+1;
 							l_info->ack_num = rcvd_ack_num;
 							write_packet(pckt, dest_ip_n, dest_port_n, src_ip_n, src_port_n, l_info->seq_num, l_info->ack_num, flags, 51200);
-		
-							// //fill the header 
-							// uint8_t hdr[20];
-							// memset(hdr, 0, 20);
-							// // uint32_t seq_n = htonl(socket->sequence_num);
-							// // local port first
-							// memcpy(hdr, &dest_port_n, 2); //uint16_t
-							// // remote port
-							// memcpy(hdr + 2, &src_port_n, 2); //uint16_t
-							// // // sequence number
-							// // memcpy(hdr + 4, &seq_n, 4); //uint32_t
-							// // // acknowledgment number 
-							// // memcpy(hdr + 8, htonl(0), 4); //uint32_t
-							// // flags
-							// uint32_t acknum;
-							// packet->readData(38, &acknum, 4);
-							// acknum = ntohl(acknum)+1;
-							// acknum = htonl(acknum);
-							
-							// memcpy(hdr+8, &acknum, 4);
-							// uint16_t flags = 0x0005;
-							// flags <<= 12;
-							// flags |= 0x0002; //SYN
-							// flags |= 0x0010; //ACK
-							// uint16_t nflags = htons(flags);
-
-							// memcpy(hdr + 12, &nflags, 2); //uint16_t
-							// // window field goes here hdr + 14, 2 bytes uint16_t
-							// // // checksum
-							// // memcpy(hdr + 16, htons(~NetworkUtil::tcp_sum()), 2); //uint16_t
-							
-							// uint16_t ws;
-							// packet->readData(48, &ws, 2);
-							// memcpy(hdr+14, &ws, 2);
-							
-							// pckt->writeData(26, &dest_ip_n, 4); //local ip
-							// pckt->writeData(30, &src_ip_n, 4); //remote ip
-							// pckt->writeData(34, hdr, 20); //header
-
-							// size_t size = 20; 
-							// uint8_t buffer[size];
-							// packet->readData(34, buffer, size);
-							// uint16_t cs = ~NetworkUtil::tcp_sum(dest_ip_n, src_ip_n, buffer, size);
-							// printf("%x \n", cs+NetworkUtil::tcp_sum(dest_ip_n, src_ip_n, buffer, size));
 							
 							this->sendPacket("IPv4", pckt);
 							l_info->seq_num += 1;
@@ -827,7 +851,7 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 								this->removeFileDescriptor(pid, fd);//close the fd with pid and fd value
 								this->returnSystemCall(socket->closesyscallUUID, 0);
 							}
-							socket->myclose_return == true;
+							socket->myclose_return = true;
 						}
 					
 					}
@@ -835,8 +859,6 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 			}
 			// ===================================================
 			// for loop for handling opening connections
-			uint32_t rcvd_ack;
-			rcvd_ack = ntohl(packet->readData(42, &rcvd_ack, 4));
 			for (auto tpl = fd_socket_map.begin(); tpl != fd_socket_map.end(); tpl++){
 				Socket_info *socket = tpl->second;
 				bool s_l_port_eq_d_port;
@@ -863,7 +885,7 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 								socket->listen_info->syn_queue = list_elem->next;
 							}
 							if (!socket->listen_info->syscallUUID) {
-								struct Info_list * l_info = (struct Info_list *) calloc(1, sizeof(struct Info_list));
+								struct Info_list *l_info = (struct Info_list *) calloc(1, sizeof(struct Info_list));
 								if (!(l_info)) {
 									//calloc failed
 									this->freePacket(packet);
@@ -872,7 +894,9 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 								//fill in listen_info
 								l_info->ip = src_ip;
 								l_info->port = src_port;
+								
 								l_info->l_ip = list_elem->l_ip;
+								l_info->l_port = list_elem->l_port;
 								l_info->seq_num = list_elem->seq_num;
 								l_info->ack_num = list_elem->ack_num;
 								
@@ -915,6 +939,7 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 								// return on success
 								this->returnSystemCall(socket->listen_info->syscallUUID, fd);
 								this->freePacket(packet);
+								return;
 								break;
 							}
 						}

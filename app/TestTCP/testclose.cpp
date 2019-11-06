@@ -36,6 +36,7 @@ protected:
 protected:
 	void E_Main()
 	{
+		printf("first main\n");
 		int server_socket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
 		struct sockaddr_in addr;
 		socklen_t len = sizeof(addr);
@@ -56,7 +57,7 @@ protected:
 
 		long accept_time = atol(env["ACCEPT_TIME"].c_str());
 		usleep(accept_time);
-
+		printf("111111\n");
 		struct sockaddr_in client_addr;
 		socklen_t client_len = sizeof(client_addr);
 		memset(&client_addr, 0, client_len);
@@ -105,7 +106,7 @@ protected:
 protected:
 	void E_Main()
 	{
-
+		printf("second main\n");
 		long connect_time = atol(env["CONNECT_TIME"].c_str());
 		usleep(connect_time);
 
@@ -120,7 +121,7 @@ protected:
 
 		int ret = connect(client_socket, (struct sockaddr*)&addr, len);
 		EXPECT_GE(ret, 0);
-
+		printf("2222222\n");
 		struct sockaddr_in temp_addr;
 		socklen_t temp_len = sizeof(temp_addr);
 		ret = getpeername(client_socket, (struct sockaddr*)&temp_addr, &temp_len);
@@ -128,18 +129,18 @@ protected:
 		EXPECT_EQ(addr.sin_addr.s_addr, temp_addr.sin_addr.s_addr);
 		EXPECT_EQ(addr.sin_family, temp_addr.sin_family);
 		EXPECT_EQ(addr.sin_port, temp_addr.sin_port);
-
+		printf("3333333\n");
 		long close_time = atol(env["CLOSE_TIME"].c_str());
 
 		struct timeval tv;
 		ret = gettimeofday(&tv, 0);
 		EXPECT_EQ(ret, 0);
-		
+		printf("44444444\n");
 		long sleep_time = close_time - (1000*1000*tv.tv_sec) - tv.tv_usec;
 		EXPECT_GE(sleep_time, 0);
 		//printf("connect sleep: %ld\n", sleep_time);
 		usleep(sleep_time);
-
+		printf("55555555\n");
 		close(client_socket);
 	}
 };

@@ -49,29 +49,31 @@ public:
 	};
 
 	struct Info_list {
-		uint32_t l_ip;
-		uint16_t l_port;
-		uint32_t ip;
-		uint16_t port;
-		uint32_t ack_num;				
-		uint32_t seq_num;
-		sct_state state;
-		Info_list *next;
+		public:
+			uint32_t l_ip;
+			uint16_t l_port;
+			uint32_t ip;
+			uint16_t port;
+			uint32_t ack_num;				
+			uint32_t seq_num;
+			sct_state state;
+			Info_list *next;
 	};
 
 	struct Listen_info {
-		//might need to store sockaddr
-		int backlog;
-		int pid;
-		UUID syscallUUID;
-		struct sockaddr_in* sockaddr;		
-		socklen_t *socklen;	
-		//SYN queue  state SYN RECEIVED pending
-		int pend_num;
-		Info_list *syn_queue; 
-		//Accept queue state ESTABLISHED, it's when ACK packet in 3 way handshake received waiting
-		int wait_num;
-		Info_list *est_queue; 
+		public:
+			//might need to store sockaddr
+			int backlog;
+			int pid;
+			UUID syscallUUID;
+			struct sockaddr_in* sockaddr;		
+			socklen_t *socklen;	
+			//SYN queue  state SYN RECEIVED pending
+			int pend_num;
+			Info_list *syn_queue; 
+			//Accept queue state ESTABLISHED, it's when ACK packet in 3 way handshake received waiting
+			int wait_num;
+			Info_list *est_queue; 
 	};
 
 	class Socket_info {
@@ -83,8 +85,14 @@ public:
 			struct sockaddr_in* addr;
 			struct sockaddr* addr2;
 			struct sockaddr* addr_peer;
+
+			uint32_t ipipip;
+			uint16_t ptptpt;
+
 			socklen_t len;
 			socklen_t len_peer;
+			bool socket_others;
+			bool socket_listen;
 			bool socket_bound;
 			bool socket_connected;
 			bool myclose;
