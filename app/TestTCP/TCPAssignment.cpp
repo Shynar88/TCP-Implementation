@@ -70,10 +70,14 @@ void TCPAssignment::systemCallback(UUID syscallUUID, int pid, const SystemCallPa
 			sckt_info->domain = param.param1_int;
 			sckt_info->socket_bound = false;
 			sckt_info->socket_connected = false;
+			sckt_info->myclose = false;
+			sckt_info->close_return = false;
+			sckt_info->myclose_return = false;
 			sckt_info->pid = pid;
 			this->fd_socket_map[fd] = sckt_info;
 		} else {
 			this->returnSystemCall(syscallUUID, -1); //TODO: make normal error handling EMFILE
+			return;
 		}
 		
 		// return on success
@@ -111,24 +115,36 @@ void TCPAssignment::systemCallback(UUID syscallUUID, int pid, const SystemCallPa
 					uint8_t flag[2] = {80, 1};//length is 20, fin = 1
 					closepacket->writeData(46, flag, 2);
 					sendPacket("IPv4", closepacket);
-					NSLEEP;
+					sckt_info->myclose = true;
+					sckt_info->close_pid = pid;
+					sckt_info->close_fd = param.param1_int;
+					sckt_info->closesyscallUUID = syscallUUID;
 				}
-				struct sockaddr_in *addr = sckt_info->addr;
-				uint16_t port = ntohs(addr->sin_port);
-				uint32_t ip = ntohl(addr->sin_addr.s_addr);
-				auto tpl = this->port_ip_map.find(port);
-				if (tpl != this->port_ip_map.end()) { //port exists in map
-					port_ip_map[port].erase(ip);
-					if(port_ip_map[port].empty()){//if there's no ip in set, remove port
-						port_ip_map.erase(port);
+				else{
+					struct sockaddr_in *addr = sckt_info->addr;
+					uint16_t port = ntohs(addr->sin_port);
+					uint32_t ip = ntohl(addr->sin_addr.s_addr);
+					auto tpl = this->port_ip_map.find(port);
+					if (tpl != this->port_ip_map.end()) { //port exists in map
+						port_ip_map[port].erase(ip);
+						if(port_ip_map[port].empty()){//if there's no ip in set, remove port
+							port_ip_map.erase(port);
+						}
 					}
+					fd_socket_map.erase(param.param1_int);
+					//when success
+					this->removeFileDescriptor(pid, param.param1_int);//close the fd with pid and fd value
+					this->returnSystemCall(syscallUUID, param.param1_int);
 				}
 			}
+			else{
+				fd_socket_map.erase(param.param1_int);
+				//when success
+				this->removeFileDescriptor(pid, param.param1_int);//close the fd with pid and fd value
+				this->returnSystemCall(syscallUUID, param.param1_int);
+			}
 		}
-		fd_socket_map.erase(param.param1_int);
-		//when success
-		this->removeFileDescriptor(pid, param.param1_int);//close the fd with pid and fd value
-		this->returnSystemCall(syscallUUID, param.param1_int);
+		
 		//this->syscall_close(syscallUUID, pid, param.param1_int);
 		
 		break;
@@ -258,11 +274,12 @@ void TCPAssignment::systemCallback(UUID syscallUUID, int pid, const SystemCallPa
 				socket->listen_info->wait_num = 0;
 				//success
 				returnSystemCall(syscallUUID, 0);
+			} else {
+				// such socket doesn't exist
+				returnSystemCall(syscallUUID, -1);
+				return;
 			}
 		}
-		// such socket doesn't exist
-		returnSystemCall(syscallUUID, -1);
-		return;
 		break;
 	}
 	case ACCEPT: {
@@ -316,11 +333,12 @@ void TCPAssignment::systemCallback(UUID syscallUUID, int pid, const SystemCallPa
 					returnSystemCall(syscallUUID, fd);
 					return;
 				}
+			} else {
+				// such socket doesn't exist
+				returnSystemCall(syscallUUID, -1);
+				return;
 			}
 		}
-		// such socket doesn't exist
-		returnSystemCall(syscallUUID, -1);
-		return;
 		break;
 	}
 	case BIND:{
@@ -329,8 +347,10 @@ void TCPAssignment::systemCallback(UUID syscallUUID, int pid, const SystemCallPa
 		auto tpl = this->fd_socket_map.find(param.param1_int);
 		if (tpl != this->fd_socket_map.end()) {
 			auto sckt_info = tpl->second; 
+			// maybe need to check by pid also
 			if (sckt_info->socket_bound) {
 				this->returnSystemCall(syscallUUID, -1); //EINVAL
+				return;
 			}
 			struct sockaddr_in *addr = static_cast<struct sockaddr_in *>(param.param2_ptr);
 			uint16_t port = ntohs(addr->sin_port);
@@ -352,7 +372,7 @@ void TCPAssignment::systemCallback(UUID syscallUUID, int pid, const SystemCallPa
 			sckt_info->len = param.param3_int;
 			sckt_info->socket_bound = true;
 		} else {
-			//failure
+			//failure, no such socket
 			this->returnSystemCall(syscallUUID, -1); //EBADF error
 		}
 		//success
@@ -422,7 +442,7 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 	flag = ntohs(flag);
 	int Fin = flag%2;
 	int Syn = (flag/2)%2;
-	int ack = (flag/16)%2;
+	int Ack = (flag/16)%2;
 
 	size_t size = packet->getSize() - 34; 
 	uint8_t buffer[size];
@@ -453,6 +473,52 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 		// FIN
 		if (fin) {
 			//TODO for closing connection
+			for (auto tpl = fd_socket_map.begin(); tpl != fd_socket_map.end(); tpl++){
+				Socket_info *socket = tpl->second;
+				if(socket->socket_bound){
+					bool rmt_ip_equal = (socket->remote_addr->sin_addr.s_addr == src_ip_n);
+					bool rmt_port_equal = (socket->remote_addr->sin_port == src_port_n);
+					bool lcl_ip_equal = (socket->addr->sin_addr.s_addr == dest_ip_n);
+					bool lcl_port_equal = (socket->addr->sin_port == dest_port_n);
+					if (rmt_ip_equal && rmt_port_equal && lcl_ip_equal && lcl_port_equal){
+						//send ACK to server to indicate that client received server's SYN ACK
+						//write packet and send it 
+						Packet *pckt = this->allocatePacket(54); //wireshark showed packet to be of size 54 bytes
+						
+						pckt->readData(26, &dest_ip_n, 4);
+						pckt->readData(30, &src_ip_n, 4);
+						pckt->readData(34, &dest_port_n, 2);
+						pckt->readData(36, &src_ip_n, 2);
+
+						uint8_t close_flag[2] = {80, 16};//length is 20, ack = 1
+						pckt->writeData(46, close_flag, 2);
+
+						this->sendPacket("IPv4", pckt);
+						this->freePacket(pckt);
+						//on success
+						if(socket->myclose_return){
+							struct sockaddr_in *addr = socket->addr;
+							int pid = socket->close_pid;
+							int fd = socket->close_fd;
+							uint16_t port = ntohs(addr->sin_port);
+							uint32_t ip = ntohl(addr->sin_addr.s_addr);
+							auto tpl = this->port_ip_map.find(port);
+							if (tpl != this->port_ip_map.end()) { //port exists in map
+								port_ip_map[port].erase(ip);
+								if(port_ip_map[port].empty()){//if there's no ip in set, remove port		
+									port_ip_map.erase(port);
+								}
+							}
+							fd_socket_map.erase(fd);
+							//when success
+							this->removeFileDescriptor(pid, fd);//close the fd with pid and fd value
+							this->returnSystemCall(socket->closesyscallUUID, 0);
+						}
+						socket->close_return = true;
+					}
+				}
+			}
+			
 		}
 
 		// SYN
@@ -461,11 +527,23 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 				// client receives SYN ACK from server
 				for (auto tpl = fd_socket_map.begin(); tpl != fd_socket_map.end(); tpl++){
 					Socket_info *socket = tpl->second;
-					bool rmt_ip_equal = (socket->remote_addr->sin_addr.s_addr == src_ip_n);
-					bool rmt_port_equal = (socket->remote_addr->sin_port == src_port_n);
-					bool lcl_ip_equal = (socket->addr->sin_addr.s_addr == dest_ip_n);
-					bool lcl_port_equal = (socket->addr->sin_port == dest_port_n);
+					//fix socket not bound bug put everything inside this loop 
+					bool rmt_ip_equal;
+					bool rmt_port_equal;
+					bool lcl_ip_equal;
+					bool lcl_port_equal;
 					bool state_syn_sent = (socket->state == SYN_SENT);
+					if (socket->socket_bound) {
+						rmt_ip_equal = (socket->remote_addr->sin_addr.s_addr == src_ip_n);
+						rmt_port_equal = (socket->remote_addr->sin_port == src_port_n);
+						lcl_ip_equal = (socket->addr->sin_addr.s_addr == dest_ip_n);
+						lcl_port_equal = (socket->addr->sin_port == dest_port_n);
+					} else {
+						rmt_ip_equal = false;
+						rmt_port_equal = false;
+						lcl_ip_equal = false;
+						lcl_port_equal = false;
+					}
 					if (socket->socket_bound && rmt_ip_equal && rmt_port_equal && lcl_ip_equal && lcl_port_equal && state_syn_sent){
 						//send ACK to server to indicate that client received server's SYN ACK
 						//write packet and send it 
@@ -498,7 +576,7 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 						this->sendPacket("IPv4", pckt);
 						this->freePacket(pckt);
 						socket->state = EST;
-						socket->is_connected = true;
+						socket->socket_connected = true;
 						//on success
 						returnSystemCall(socket->syscallUUID, 0);
 						return;
@@ -643,7 +721,7 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 							pckt->writeData(30, &src_ip_n, 4); //remote ip
 							pckt->writeData(34, hdr, 20); //header
 							this->sendPacket("IPv4", pckt);
-							this->freePacket(pckt);
+							//this->freePacket(pckt); SUPER WEIRD
 							return;
 						}
 					}
@@ -656,101 +734,125 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 
 		// ACK
 		if (ack) {
-			//TODO should return returnSystemCall with saved syscallUUID from blocking syscalls
-			// TODO increment waiting sockets stuff
+			// ==========================================================
+			//for loop for handling closing connections
+			for (auto tpl = fd_socket_map.begin(); tpl != fd_socket_map.end(); tpl++){
+				Socket_info *socket = tpl->second;
+				if(socket->socket_bound){
+					bool rmt_ip_equal = (socket->remote_addr->sin_addr.s_addr == src_ip_n);
+					bool rmt_port_equal = (socket->remote_addr->sin_port == src_port_n);
+					bool lcl_ip_equal = (socket->addr->sin_addr.s_addr == dest_ip_n);
+					bool lcl_port_equal = (socket->addr->sin_port == dest_port_n);
+					if (rmt_ip_equal && rmt_port_equal && lcl_ip_equal && lcl_port_equal){
+						if(socket->myclose){
+							if(socket->close_return){
+								struct sockaddr_in *addr = socket->addr;
+								int pid = socket->close_pid;
+								int fd = socket->close_fd;
+								uint16_t port = ntohs(addr->sin_port);
+								uint32_t ip = ntohl(addr->sin_addr.s_addr);
+								auto tpl = this->port_ip_map.find(port);
+								if (tpl != this->port_ip_map.end()) { //port exists in map	
+									port_ip_map[port].erase(ip);
+									if(port_ip_map[port].empty()){//if there's no ip in set, remove port		
+										port_ip_map.erase(port);
+									}
+								}
+								fd_socket_map.erase(fd);
+								//when success
+								this->removeFileDescriptor(pid, fd);//close the fd with pid and fd value
+								this->returnSystemCall(socket->closesyscallUUID, 0);
+							}
+							socket->myclose_return == true;
+						}
+					
+					}
+				}
+			}
+			// ===================================================
+			// for loop for handling opening connections
 			uint32_t rcvd_ack;
 			rcvd_ack = ntohl(packet->readData(42, &rcvd_ack, 4));
 			for (auto tpl = fd_socket_map.begin(); tpl != fd_socket_map.end(); tpl++){
 				Socket_info *socket = tpl->second;
-				bool s_l_port_eq_d_port = (socket->addr->sin_port == dest_port_n);
-				bool s_l_ip_eq_d_ip = (socket->addr->sin_addr.s_addr == dest_ip_n || socket->addr->sin_addr.s_addr == htonl(INADDR_ANY));
-				bool s_r_ip_eq_s_ip = (socket->remote_addr->sin_addr.s_addr == src_ip_n);
-				bool s_r_port_eq_s_port = (socket->remote_addr->sin_port == src_port_n);
-				if (s_l_port_eq_d_port && s_l_ip_eq_d_ip && s_r_ip_eq_s_ip && s_r_port_eq_s_port && socket->socket_bound && socket->state == FIN_W_1) {
-					// ACK FIN WAIT 1
-					if (rcvd_ack != socket->latest_expected_ack) {
-						//send packet 
-						//write packet and send it 
-						Packet *pckt = this->allocatePacket(54); //wireshark showed packet to be of size 54 bytes
-						//fill the header 
-						uint8_t hdr[20];
-						memset(hdr, 0, 20);
-						// uint32_t seq_n = htonl(socket->sequence_num);
-						// local port first
-						memcpy(hdr, &socket->addr->sin_port, 2); //uint16_t
-						// remote port
-						memcpy(hdr + 2, &socket->remote_addr->sin_port, 2); //uint16_t
-						// // sequence number, should substract 1!
-						// memcpy(hdr + 4, &seq_n, 4); //uint32_t
-						// // acknowledgment number 
-						// memcpy(hdr + 8, htonl(0), 4); //uint32_t
-						// flags
-						uint16_t flags = 0x0005;
-						flags <<= 12;
-						flags |= 0x0010; //ACK
-						uint16_t nflags = htons(flags);
-						memcpy(hdr + 12, &nflags, 2); //uint16_t
-						// window field goes here hdr + 14, 2 bytes uint16_t
-						// // checksum
-						// memcpy(hdr + 16, htons(~NetworkUtil::tcp_sum()), 2); //uint16_t
-
-						pckt->writeData(26, &dest_ip_n, 4); //local ip
-						pckt->writeData(30, &src_ip_n, 4); //remote ip
-						pckt->writeData(34, hdr, 20); //header
-						this->sendPacket("IPv4", pckt);
-						this->freePacket(pckt);
-						return;
-					} else {
-						// transfer to FIN WAIT 2
-						this->freePacket(packet);
-						socket->state = FIN_W_2;
-						return;
-					}
-				} else if {
-					// ACK last ack
-				} else if {
-					// ack after fin 
-				} else if (socket->socket_bound && socket->state == CLOSING && s_l_port_eq_d_port && s_l_ip_eq_d_ip && s_r_ip_eq_s_ip && s_r_port_eq_s_port){
-					// Closing ACK. CLient received ACK after FIN; change state, send nothing
-					if (rcvd_ack != socket->latest_expected_ack) {
-						//send packet 
-						//write packet and send it 
-						Packet *pckt = this->allocatePacket(54); //wireshark showed packet to be of size 54 bytes
-						//fill the header 
-						uint8_t hdr[20];
-						memset(hdr, 0, 20);
-						// uint32_t seq_n = htonl(socket->sequence_num);
-						// local port first
-						memcpy(hdr, &socket->addr->sin_port, 2); //uint16_t
-						// remote port
-						memcpy(hdr + 2, &socket->remote_addr->sin_port, 2); //uint16_t
-						// // sequence number, should substract 1!
-						// memcpy(hdr + 4, &seq_n, 4); //uint32_t
-						// // acknowledgment number 
-						// memcpy(hdr + 8, htonl(0), 4); //uint32_t
-						// flags
-						uint16_t flags = 0x0005;
-						flags <<= 12;
-						flags |= 0x0010; //ACK
-						uint16_t nflags = htons(flags);
-						memcpy(hdr + 12, &nflags, 2); //uint16_t
-						// window field goes here hdr + 14, 2 bytes uint16_t
-						// // checksum
-						// memcpy(hdr + 16, htons(~NetworkUtil::tcp_sum()), 2); //uint16_t
-
-						pckt->writeData(26, &dest_ip_n, 4); //local ip
-						pckt->writeData(30, &src_ip_n, 4); //remote ip
-						pckt->writeData(34, hdr, 20); //header
-						this->sendPacket("IPv4", pckt);
-						this->freePacket(pckt);
-						return;
-					} else {
-
-					}
+				bool s_l_port_eq_d_port;
+				bool s_l_ip_eq_d_ip;
+				if (socket->socket_bound) {
+					s_l_port_eq_d_port = (socket->addr->sin_port == dest_port_n);
+					s_l_ip_eq_d_ip = (socket->addr->sin_addr.s_addr == dest_ip_n || socket->addr->sin_addr.s_addr == htonl(INADDR_ANY));
+				} else {
+					s_l_port_eq_d_port = false;
+					s_l_ip_eq_d_ip = false;
 				}
-			}
-			for (auto tpl = fd_socket_map.begin(); tpl != fd_socket_map.end(); tpl++){
-
+				if (socket->socket_bound && socket->state == PASSIVE_SCKT && s_l_port_eq_d_port && s_l_ip_eq_d_ip) {
+					// handshaking 3rd step
+					struct Info_list *prev_list_elem = NULL;
+					struct Info_list *list_elem;
+					for (list_elem = socket->listen_info->syn_queue; list_elem != NULL; list_elem = list_elem->next) {
+						bool ip_equal = (list_elem->ip == src_ip);
+						bool port_equal = (list_elem->port == src_port);
+						if (ip_equal && port_equal) {
+							socket->listen_info->pend_num -= 1;
+							if (prev_list_elem != NULL) {
+								prev_list_elem->next = list_elem->next;
+							} else {
+								socket->listen_info->syn_queue = list_elem->next;
+							}
+							if (!socket->listen_info->syscallUUID) {
+								struct Info_list * l_info = (struct Info_list *) calloc(1, sizeof(struct Info_list));
+								if (!(l_info)) {
+									//calloc failed
+									this->freePacket(packet);
+									return;
+								}
+								//fill in listen_info
+								l_info->ip = src_ip;
+								l_info->port = src_port;
+								l_info->l_ip = list_elem->l_ip;
+								//seq, ack num should be fixed here, and congestion management
+								l_info->state = EST;
+								l_info->next = socket->listen_info->est_queue;
+								socket->listen_info->est_queue = l_info;
+								socket->listen_info->wait_num += 1;
+								this->freePacket(packet);
+								free(list_elem);
+								return;
+							} else {
+								// get fd for blocked accept
+								int fd;
+								if ((fd = createFileDescriptor(socket->listen_info->pid)) != -1) {
+									auto sckt_info = new Socket_info;
+									sckt_info->socket_bound = true;
+									sckt_info->socket_connected = true;
+									sckt_info->state = EST;
+									sckt_info->addr->sin_port = htons(list_elem->l_port);
+									sckt_info->addr->sin_addr.s_addr = htonl(list_elem->l_ip);
+									sckt_info->remote_addr->sin_port = src_port_n;
+									sckt_info->remote_addr->sin_addr.s_addr = src_ip_n;
+									//handle ack, seq numbers. maybe need window size for future kens
+									this->fd_socket_map[fd] = sckt_info;
+									socket->listen_info->sockaddr->sin_family = AF_INET;
+									socket->listen_info->sockaddr->sin_port = sckt_info->remote_addr->sin_port;
+									socket->listen_info->sockaddr->sin_addr.s_addr = sckt_info->remote_addr->sin_addr.s_addr;
+									*(socket->listen_info->socklen) = sizeof(struct sockaddr_in);
+									free(list_elem);
+								} else {
+									this->returnSystemCall(socket->listen_info->syscallUUID, -1); //TODO: make normal error handling EMFILE
+									this->freePacket(packet);
+									return;
+								}
+								
+								// return on success
+								this->returnSystemCall(socket->listen_info->syscallUUID, fd);
+								this->freePacket(packet);
+								break;
+							}
+						}
+						prev_list_elem = list_elem;
+					}
+					this->freePacket(packet);
+					return;
+				}
 			}
 			this->freePacket(packet);
 			return;
@@ -762,19 +864,13 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 		return;
 	}
 
-	uint16_t sn;
-	packet->readData(38, &sn, 2);
-	sn = sn+1;//sequence number+1
-	Packet* myPacket = this->clonePacket(packet);
-	myPacket->writeData(26, dest_ip, 4);
-	myPacket->writeData(30, src_ip, 4);//change the destination and source ip
-	myPacket->writeData(40, &sn, 2);//give the value to ack that sn+1
-	
-
-	
-
-
-
+	// uint16_t sn;
+	// packet->readData(38, &sn, 2);
+	// sn = sn+1;//sequence number+1
+	// Packet* myPacket = this->clonePacket(packet);
+	// myPacket->writeData(26, dest_ip, 4);
+	// myPacket->writeData(30, src_ip, 4);//change the destination and source ip
+	// myPacket->writeData(40, &sn, 2);//give the value to ack that sn+1
 }
 
 void TCPAssignment::timerCallback(void* payload)

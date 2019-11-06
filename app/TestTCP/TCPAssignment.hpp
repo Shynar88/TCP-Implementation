@@ -85,13 +85,19 @@ public:
 			socklen_t len_peer;
 			bool socket_bound;
 			bool socket_connected;
-			bool is_connected;
+			bool myclose;
+			bool close_return;
+			bool myclose_return;
+			UUID closesyscallUUID;
+			int close_pid;
+			int close_fd;
 			UUID syscallUUID;
-			uint32_t ack_num;					// from socket
-			uint32_t seq_num;					// from socket, ++ on ACK
-			uint32_t latest_ack_num; 			// socket receives it
-			uint32_t latest_expected_ack;		// FIN's ack num 
-			uint32_t latest_expected_seq_num; // FIN's seq num sent
+			// uncomment seq, ack num fields when needed
+			// uint32_t ack_num;					// from socket
+			// uint32_t seq_num;					// from socket, ++ on ACK
+			// uint32_t latest_ack_num; 			// socket receives it
+			// uint32_t latest_expected_ack;		// FIN's ack num 
+			// uint32_t latest_expected_seq_num; // FIN's seq num sent
 			sct_state state;
 			struct Listen_info* listen_info;
 	};
