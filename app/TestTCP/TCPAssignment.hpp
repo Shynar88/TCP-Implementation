@@ -53,6 +53,8 @@ public:
 		uint16_t l_port;
 		uint32_t ip;
 		uint16_t port;
+		uint32_t ack_num;				
+		uint32_t seq_num;
 		sct_state state;
 		Info_list *next;
 	};
@@ -93,14 +95,15 @@ public:
 			int close_fd;
 			UUID syscallUUID;
 			// uncomment seq, ack num fields when needed
-			// uint32_t ack_num;					// from socket
-			// uint32_t seq_num;					// from socket, ++ on ACK
-			// uint32_t latest_ack_num; 			// socket receives it
+			uint32_t ack_num;					// from socket
+			uint32_t seq_num;					// from socket, ++ on ACK
+			uint32_t latest_ack_num; 			// socket receives it
 			// uint32_t latest_expected_ack;		// FIN's ack num 
 			// uint32_t latest_expected_seq_num; // FIN's seq num sent
 			sct_state state;
 			struct Listen_info* listen_info;
 	};
+	virtual void write_packet(Packet *packet, uint32_t l_ip, uint16_t l_port, uint32_t r_ip, uint16_t r_port, uint32_t seq_num, uint32_t ack_num, uint16_t flag, uint16_t window_size) final;
 	std::map<int, Socket_info *> fd_socket_map;
 	std::map<uint16_t, std::set<uint32_t>> port_ip_map;
 protected:

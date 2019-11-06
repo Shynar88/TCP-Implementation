@@ -213,37 +213,40 @@ void TCPAssignment::systemCallback(UUID syscallUUID, int pid, const SystemCallPa
 
 				//write packet and send it 
 				Packet *pckt = this->allocatePacket(54); //wireshark showed packet to be of size 54 bytes
-				//fill the header 
-				uint8_t hdr[20];
-				memset(hdr, 0, 20);
-				uint16_t l_port = htons(socket->addr->sin_port);
-				uint16_t r_port = htons(socket->remote_addr->sin_port);
-				uint32_t l_ip = htonl(socket->addr->sin_addr.s_addr);
-				uint32_t r_ip = htonl(socket->remote_addr->sin_addr.s_addr);
-				// uint32_t seq_n = htonl(socket->sequence_num);
-				// local port first
-				memcpy(hdr, &l_port, 2); //uint16_t
-				// remote port
-				memcpy(hdr + 2, &r_port, 2); //uint16_t
-				// // sequence number
-				// memcpy(hdr + 4, &seq_n, 4); //uint32_t
-				// // acknowledgment number 
-				// memcpy(hdr + 8, htonl(0), 4); //uint32_t
 				// flags
 				uint16_t flags = 0x5;
 				flags <<= 12;
 				flags |= 0x0002; //SYN
-				uint16_t nflags = htons(flags);
-				memcpy(hdr + 12, &nflags, 2); //uint16_t
-				// window field goes here hdr + 14, 2 bytes uint16_t
+				write_packet(pckt, socket->addr->sin_addr.s_addr, socket->remote_addr->sin_port, socket->remote_addr->sin_addr.s_addr, socket->remote_addr->sin_port, socket->seq_num, socket->ack_num, flags, 51200);
+				// //fill the header 
+				// uint8_t hdr[20];
+				// memset(hdr, 0, 20);
+				// uint16_t l_port = htons(socket->addr->sin_port);
+				// uint16_t r_port = htons(socket->remote_addr->sin_port);
+				// uint32_t l_ip = htonl(socket->addr->sin_addr.s_addr);
+				// uint32_t r_ip = htonl(socket->remote_addr->sin_addr.s_addr);
+				// uint32_t seq_n = htonl(socket->seq_num);
+				// // local port first
+				// memcpy(hdr, &l_port, 2); //uint16_t
+				// // remote port
+				// memcpy(hdr + 2, &r_port, 2); //uint16_t
+				// // sequence number
+				// memcpy(hdr + 4, &seq_n, 4); //uint32_t
+				// // acknowledgment number 
+				// memcpy(hdr + 8, htonl(0), 4); //uint32_t
+				
+				// uint16_t nflags = htons(flags);
+				// memcpy(hdr + 12, &nflags, 2); //uint16_t
+				// // window field goes here hdr + 14, 2 bytes uint16_t, convert to htons
+				// memcpy(hdr + 14, &window, 2);
 				// // checksum
 				// memcpy(hdr + 16, htons(~NetworkUtil::tcp_sum()), 2); //uint16_t
 
-				pckt->writeData(26, &l_ip, 4); //local ip
-				pckt->writeData(30, &r_ip, 4); //remote ip
-				pckt->writeData(34, hdr, 20); //header
+				// pckt->writeData(26, &l_ip, 4); //local ip
+				// pckt->writeData(30, &r_ip, 4); //remote ip
+				// pckt->writeData(34, hdr, 20); //header
 				this->sendPacket("IPv4", pckt);
-				// socket->sequence_num += 1;
+				socket->seq_num += 1;
 			} else {
 				// such socket doesn't exist
 				returnSystemCall(syscallUUID, -1);
@@ -323,6 +326,9 @@ void TCPAssignment::systemCallback(UUID syscallUUID, int pid, const SystemCallPa
 						socket->state = est_queue_el->state;
 						socket->socket_bound = true;
 						socket->pid = pid;
+						socket->ack_num = est_queue_el->ack_num;
+						socket->seq_num = est_queue_el->seq_num;
+						socket->latest_ack_num = est_queue_el->seq_num;
 						this->fd_socket_map[fd] = socket;
 						free(est_queue_el);
 					} else {
@@ -476,11 +482,11 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 			for (auto tpl = fd_socket_map.begin(); tpl != fd_socket_map.end(); tpl++){
 				Socket_info *socket = tpl->second;
 				if(socket->socket_bound){
-					bool rmt_ip_equal = (socket->remote_addr->sin_addr.s_addr == src_ip_n);
-					bool rmt_port_equal = (socket->remote_addr->sin_port == src_port_n);
+					//bool rmt_ip_equal = (socket->remote_addr->sin_addr.s_addr == src_ip_n);
+					//bool rmt_port_equal = (socket->remote_addr->sin_port == src_port_n);
 					bool lcl_ip_equal = (socket->addr->sin_addr.s_addr == dest_ip_n);
 					bool lcl_port_equal = (socket->addr->sin_port == dest_port_n);
-					if (rmt_ip_equal && rmt_port_equal && lcl_ip_equal && lcl_port_equal){
+					if (lcl_ip_equal && lcl_port_equal){
 						//send ACK to server to indicate that client received server's SYN ACK
 						//write packet and send it 
 						Packet *pckt = this->allocatePacket(54); //wireshark showed packet to be of size 54 bytes
@@ -490,11 +496,22 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 						pckt->readData(34, &dest_port_n, 2);
 						pckt->readData(36, &src_ip_n, 2);
 
-						uint8_t close_flag[2] = {80, 16};//length is 20, ack = 1
-						pckt->writeData(46, close_flag, 2);
+						uint16_t close_flag = 0x0005;
+						close_flag <<= 12;
+						close_flag |= 0x0010; //ACK
+						close_flag = htons(close_flag);
+						pckt->writeData(46, &close_flag, 2);
+						size_t size = 20; 
+						uint8_t buffer[size];
+						pckt->readData(34, buffer, size);
+						uint16_t cs = ~NetworkUtil::tcp_sum(dest_ip_n, src_ip_n, buffer, size);
+						cs = htons(cs);
+						pckt->writeData(50, &cs, 2);
+
+
 
 						this->sendPacket("IPv4", pckt);
-						this->freePacket(pckt);
+						//this->freePacket(pckt);
 						//on success
 						if(socket->myclose_return){
 							struct sockaddr_in *addr = socket->addr;
@@ -548,33 +565,40 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 						//send ACK to server to indicate that client received server's SYN ACK
 						//write packet and send it 
 						Packet *pckt = this->allocatePacket(54); //wireshark showed packet to be of size 54 bytes
-						//fill the header 
-						uint8_t hdr[20];
-						memset(hdr, 0, 20);
-						// uint32_t seq_n = htonl(socket->sequence_num);
-						// local port first
-						memcpy(hdr, &dest_port_n, 2); //uint16_t
-						// remote port
-						memcpy(hdr + 2, &src_port_n, 2); //uint16_t
-						// // sequence number
-						// memcpy(hdr + 4, &seq_n, 4); //uint32_t
-						// // acknowledgment number 
-						// memcpy(hdr + 8, htonl(0), 4); //uint32_t
 						// flags
 						uint16_t flags = 0x0005;
 						flags <<= 12;
 						flags |= 0x0010; //ACK
-						uint16_t nflags = htons(flags);
-						memcpy(hdr + 12, &nflags, 2); //uint16_t
-						// window field goes here hdr + 14, 2 bytes uint16_t
-						// // checksum
-						// memcpy(hdr + 16, htons(~NetworkUtil::tcp_sum()), 2); //uint16_t
+						uint32_t rcvd_ack_num;
+						rcvd_ack_num = ntohl(packet->readData(42, &rcvd_ack_num, 4));
+						socket->latest_ack_num = rcvd_ack_num;
+						uint32_t ack_num;
+						ack_num = ntohl(packet->readData(38, &ack_num, 4)) + 1;
+						socket->ack_num = ack_num;
+						write_packet(pckt, dest_ip_n, dest_port_n, src_ip_n, src_port_n, socket->seq_num, socket->ack_num, flags, 51200);
+						// //fill the header 
+						// uint8_t hdr[20];
+						// memset(hdr, 0, 20);
+						// // uint32_t seq_n = htonl(socket->sequence_num);
+						// // local port first
+						// memcpy(hdr, &dest_port_n, 2); //uint16_t
+						// // remote port
+						// memcpy(hdr + 2, &src_port_n, 2); //uint16_t
+						// // // sequence number
+						// // memcpy(hdr + 4, &seq_n, 4); //uint32_t
+						// // // acknowledgment number 
+						// // memcpy(hdr + 8, htonl(0), 4); //uint32_t
+						// uint16_t nflags = htons(flags);
+						// memcpy(hdr + 12, &nflags, 2); //uint16_t
+						// // window field goes here hdr + 14, 2 bytes uint16_t
+						// // // checksum
+						// // memcpy(hdr + 16, htons(~NetworkUtil::tcp_sum()), 2); //uint16_t
 
-						pckt->writeData(26, &dest_ip_n, 4); //local ip
-						pckt->writeData(30, &src_ip_n, 4); //remote ip
-						pckt->writeData(34, hdr, 20); //header
+						// pckt->writeData(26, &dest_ip_n, 4); //local ip
+						// pckt->writeData(30, &src_ip_n, 4); //remote ip
+						// pckt->writeData(34, hdr, 20); //header
 						this->sendPacket("IPv4", pckt);
-						this->freePacket(pckt);
+						this->freePacket(packet);
 						socket->state = EST;
 						socket->socket_connected = true;
 						//on success
@@ -585,33 +609,40 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 						//send ACK to server to indicate that client received server's SYN ACK, but client already is not in SYN SENT state
 						//write packet and send it 
 						Packet *pckt = this->allocatePacket(54); //wireshark showed packet to be of size 54 bytes
-						//fill the header 
-						uint8_t hdr[20];
-						memset(hdr, 0, 20);
-						// uint32_t seq_n = htonl(socket->sequence_num);
-						// local port first
-						memcpy(hdr, &dest_port_n, 2); //uint16_t
-						// remote port
-						memcpy(hdr + 2, &src_port_n, 2); //uint16_t
-						// // sequence number
-						// memcpy(hdr + 4, &seq_n, 4); //uint32_t
-						// // acknowledgment number 
-						// memcpy(hdr + 8, htonl(0), 4); //uint32_t
 						// flags
 						uint16_t flags = 0x0005;
 						flags <<= 12;
 						flags |= 0x0010; //ACK
-						uint16_t nflags = htons(flags);
-						memcpy(hdr + 12, &nflags, 2); //uint16_t
-						// window field goes here hdr + 14, 2 bytes uint16_t
-						// // checksum
-						// memcpy(hdr + 16, htons(~NetworkUtil::tcp_sum()), 2); //uint16_t
+						uint32_t rcvd_ack_num;
+						rcvd_ack_num = ntohl(packet->readData(38, &rcvd_ack_num, 4)) + 1;
+						write_packet(pckt, dest_ip_n, dest_port_n, src_ip_n, src_port_n, socket->seq_num, rcvd_ack_num, flags, 51200);
+						// //fill the header 
+						// uint8_t hdr[20];
+						// memset(hdr, 0, 20);
+						// // uint32_t seq_n = htonl(socket->sequence_num);
+						// // local port first
+						// memcpy(hdr, &dest_port_n, 2); //uint16_t
+						// // remote port
+						// memcpy(hdr + 2, &src_port_n, 2); //uint16_t
+						// // // sequence number
+						// // memcpy(hdr + 4, &seq_n, 4); //uint32_t
+						// // // acknowledgment number 
+						// // memcpy(hdr + 8, htonl(0), 4); //uint32_t
+						// // flags
+						// uint16_t flags = 0x0005;
+						// flags <<= 12;
+						// flags |= 0x0010; //ACK
+						// uint16_t nflags = htons(flags);
+						// memcpy(hdr + 12, &nflags, 2); //uint16_t
+						// // window field goes here hdr + 14, 2 bytes uint16_t
+						// // // checksum
+						// // memcpy(hdr + 16, htons(~NetworkUtil::tcp_sum()), 2); //uint16_t
 
-						pckt->writeData(26, &dest_ip_n, 4); //local ip
-						pckt->writeData(30, &src_ip_n, 4); //remote ip
-						pckt->writeData(34, hdr, 20); //header
+						// pckt->writeData(26, &dest_ip_n, 4); //local ip
+						// pckt->writeData(30, &src_ip_n, 4); //remote ip
+						// pckt->writeData(34, hdr, 20); //header
 						this->sendPacket("IPv4", pckt);
-						this->freePacket(pckt);
+						// this->freePacket(pckt);
 					}
 				}
 
@@ -644,34 +675,37 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 									//send packet 
 									//write packet and send it 
 									Packet *pckt = this->allocatePacket(54); //wireshark showed packet to be of size 54 bytes
-									//fill the header 
-									uint8_t hdr[20];
-									memset(hdr, 0, 20);
-									// uint32_t seq_n = htonl(socket->sequence_num);
-									// local port first
-									memcpy(hdr, &dest_port_n, 2); //uint16_t
-									// remote port
-									memcpy(hdr + 2, &src_port_n, 2); //uint16_t
-									// // sequence number
-									// memcpy(hdr + 4, &seq_n, 4); //uint32_t
-									// // acknowledgment number 
-									// memcpy(hdr + 8, htonl(0), 4); //uint32_t
 									// flags
 									uint16_t flags = 0x0005;
 									flags <<= 12;
 									flags |= 0x0002; //SYN
 									flags |= 0x0010; //ACK
-									uint16_t nflags = htons(flags);
-									memcpy(hdr + 12, &nflags, 2); //uint16_t
-									// window field goes here hdr + 14, 2 bytes uint16_t
-									// // checksum
-									// memcpy(hdr + 16, htons(~NetworkUtil::tcp_sum()), 2); //uint16_t
+									write_packet(pckt, dest_ip_n, dest_port_n, src_ip_n, src_port_n, list_elem->seq_num - 1, list_elem->ack_num, flags, 51200);
+									// //fill the header 
+									// uint8_t hdr[20];
+									// memset(hdr, 0, 20);
+									// // uint32_t seq_n = htonl(socket->sequence_num);
+									// // local port first
+									// memcpy(hdr, &dest_port_n, 2); //uint16_t
+									// // remote port
+									// memcpy(hdr + 2, &src_port_n, 2); //uint16_t
+									// // // sequence number
+									// // memcpy(hdr + 4, &seq_n, 4); //uint32_t
+									// // // acknowledgment number 
+									// // memcpy(hdr + 8, htonl(0), 4); //uint32_t
+		
+									// uint16_t nflags = htons(flags);
+									// memcpy(hdr + 12, &nflags, 2); //uint16_t
+									// // window field goes here hdr + 14, 2 bytes uint16_t
+									// // // checksum
+									// // memcpy(hdr + 16, htons(~NetworkUtil::tcp_sum()), 2); //uint16_t
 
-									pckt->writeData(26, &dest_ip_n, 4); //local ip
-									pckt->writeData(30, &src_ip_n, 4); //remote ip
-									pckt->writeData(34, hdr, 20); //header
+									// pckt->writeData(26, &dest_ip_n, 4); //local ip
+									// pckt->writeData(30, &src_ip_n, 4); //remote ip
+									// pckt->writeData(34, hdr, 20); //header
 									this->sendPacket("IPv4", pckt);
-									this->freePacket(pckt);
+									this->freePacket(packet);
+									return;
 								}
 							} 
 							//not pending yet
@@ -688,40 +722,69 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 							l_info->l_port = dest_port;
 							l_info->state = SYN_RECEIVED;
 							l_info->next = socket->listen_info->syn_queue;
+							l_info->seq_num = socket->seq_num;
 							socket->listen_info->syn_queue = l_info;
 							socket->listen_info->pend_num += 1;
 
 							//send packet 
 							//write packet and send it 
 							Packet *pckt = this->allocatePacket(54); //wireshark showed packet to be of size 54 bytes
-							//fill the header 
-							uint8_t hdr[20];
-							memset(hdr, 0, 20);
-							// uint32_t seq_n = htonl(socket->sequence_num);
-							// local port first
-							memcpy(hdr, &dest_port_n, 2); //uint16_t
-							// remote port
-							memcpy(hdr + 2, &src_port_n, 2); //uint16_t
-							// // sequence number
-							// memcpy(hdr + 4, &seq_n, 4); //uint32_t
-							// // acknowledgment number 
-							// memcpy(hdr + 8, htonl(0), 4); //uint32_t
-							// flags
 							uint16_t flags = 0x0005;
 							flags <<= 12;
 							flags |= 0x0002; //SYN
 							flags |= 0x0010; //ACK
-							uint16_t nflags = htons(flags);
-							memcpy(hdr + 12, &nflags, 2); //uint16_t
-							// window field goes here hdr + 14, 2 bytes uint16_t
-							// // checksum
-							// memcpy(hdr + 16, htons(~NetworkUtil::tcp_sum()), 2); //uint16_t
+							uint32_t rcvd_ack_num;
+							rcvd_ack_num = ntohl(packet->readData(38, &rcvd_ack_num, 4)) + 1;
+							l_info->ack_num = rcvd_ack_num;
+							write_packet(pckt, dest_ip_n, dest_port_n, src_ip_n, src_port_n, l_info->seq_num, l_info->ack_num, flags, 51200);
+		
+							// //fill the header 
+							// uint8_t hdr[20];
+							// memset(hdr, 0, 20);
+							// // uint32_t seq_n = htonl(socket->sequence_num);
+							// // local port first
+							// memcpy(hdr, &dest_port_n, 2); //uint16_t
+							// // remote port
+							// memcpy(hdr + 2, &src_port_n, 2); //uint16_t
+							// // // sequence number
+							// // memcpy(hdr + 4, &seq_n, 4); //uint32_t
+							// // // acknowledgment number 
+							// // memcpy(hdr + 8, htonl(0), 4); //uint32_t
+							// // flags
+							// uint32_t acknum;
+							// packet->readData(38, &acknum, 4);
+							// acknum = ntohl(acknum)+1;
+							// acknum = htonl(acknum);
+							
+							// memcpy(hdr+8, &acknum, 4);
+							// uint16_t flags = 0x0005;
+							// flags <<= 12;
+							// flags |= 0x0002; //SYN
+							// flags |= 0x0010; //ACK
+							// uint16_t nflags = htons(flags);
 
-							pckt->writeData(26, &dest_ip_n, 4); //local ip
-							pckt->writeData(30, &src_ip_n, 4); //remote ip
-							pckt->writeData(34, hdr, 20); //header
+							// memcpy(hdr + 12, &nflags, 2); //uint16_t
+							// // window field goes here hdr + 14, 2 bytes uint16_t
+							// // // checksum
+							// // memcpy(hdr + 16, htons(~NetworkUtil::tcp_sum()), 2); //uint16_t
+							
+							// uint16_t ws;
+							// packet->readData(48, &ws, 2);
+							// memcpy(hdr+14, &ws, 2);
+							
+							// pckt->writeData(26, &dest_ip_n, 4); //local ip
+							// pckt->writeData(30, &src_ip_n, 4); //remote ip
+							// pckt->writeData(34, hdr, 20); //header
+
+							// size_t size = 20; 
+							// uint8_t buffer[size];
+							// packet->readData(34, buffer, size);
+							// uint16_t cs = ~NetworkUtil::tcp_sum(dest_ip_n, src_ip_n, buffer, size);
+							// printf("%x \n", cs+NetworkUtil::tcp_sum(dest_ip_n, src_ip_n, buffer, size));
+							
 							this->sendPacket("IPv4", pckt);
-							//this->freePacket(pckt); SUPER WEIRD
+							l_info->seq_num += 1;
+							this->freePacket(packet);
 							return;
 						}
 					}
@@ -739,11 +802,12 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 			for (auto tpl = fd_socket_map.begin(); tpl != fd_socket_map.end(); tpl++){
 				Socket_info *socket = tpl->second;
 				if(socket->socket_bound){
-					bool rmt_ip_equal = (socket->remote_addr->sin_addr.s_addr == src_ip_n);
-					bool rmt_port_equal = (socket->remote_addr->sin_port == src_port_n);
+					//bool rmt_ip_equal = (socket->remote_addr->sin_addr.s_addr == src_ip_n);
+					//bool rmt_port_equal = (socket->remote_addr->sin_port == src_port_n);
 					bool lcl_ip_equal = (socket->addr->sin_addr.s_addr == dest_ip_n);
 					bool lcl_port_equal = (socket->addr->sin_port == dest_port_n);
-					if (rmt_ip_equal && rmt_port_equal && lcl_ip_equal && lcl_port_equal){
+					// if (rmt_ip_equal && rmt_port_equal && lcl_ip_equal && lcl_port_equal){ //DEBUG
+					if (lcl_ip_equal && lcl_port_equal){
 						if(socket->myclose){
 							if(socket->close_return){
 								struct sockaddr_in *addr = socket->addr;
@@ -809,6 +873,9 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 								l_info->ip = src_ip;
 								l_info->port = src_port;
 								l_info->l_ip = list_elem->l_ip;
+								l_info->seq_num = list_elem->seq_num;
+								l_info->ack_num = list_elem->ack_num;
+								
 								//seq, ack num should be fixed here, and congestion management
 								l_info->state = EST;
 								l_info->next = socket->listen_info->est_queue;
@@ -829,6 +896,9 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 									sckt_info->addr->sin_addr.s_addr = htonl(list_elem->l_ip);
 									sckt_info->remote_addr->sin_port = src_port_n;
 									sckt_info->remote_addr->sin_addr.s_addr = src_ip_n;
+									sckt_info->seq_num = list_elem->seq_num;
+									sckt_info->ack_num = list_elem->ack_num;
+									sckt_info->latest_ack_num = list_elem->seq_num;
 									//handle ack, seq numbers. maybe need window size for future kens
 									this->fd_socket_map[fd] = sckt_info;
 									socket->listen_info->sockaddr->sin_family = AF_INET;
@@ -878,5 +948,37 @@ void TCPAssignment::timerCallback(void* payload)
 	
 }
 
+void TCPAssignment::write_packet(Packet *pckt, uint32_t l_ip, uint16_t l_port, uint32_t r_ip, uint16_t r_port, uint32_t seq_num, uint32_t ack_num, uint16_t flag, uint16_t window_size) {
+	//fill the header 
+	uint8_t hdr[20];
+	memset(hdr, 0, 20);
+	// uint16_t l_port = htons(l_port);
+	// uint16_t r_port = htons(r_port);
+	// uint32_t l_ip = htonl(l_ip);
+	// uint32_t r_ip = htonl(r_ip);
+	uint32_t seq_n = htonl(seq_num);
+	uint32_t ack_n = htonl(ack_num);
+	uint16_t nflags = htons(flag);
+	uint16_t window_size_n = htons(window_size);
+	// local port first
+	memcpy(hdr, &l_port, 2); //uint16_t
+	// remote port
+	memcpy(hdr + 2, &r_port, 2); //uint16_t
+	// sequence number
+	memcpy(hdr + 4, &seq_n, 4); //uint32_t
+	// acknowledgment number 
+	memcpy(hdr + 8, &ack_n, 4); //uint32_t
+	// flags
+	memcpy(hdr + 12, &nflags, 2); //uint16_t
+	// window field goes here hdr + 14, 2 bytes uint16_t, convert to htons
+	memcpy(hdr + 14, &window_size_n, 2);
+	// checksum
+	uint16_t checksum = htons(~NetworkUtil::tcp_sum(l_ip, r_ip, hdr, 20));
+	memcpy(hdr + 16, &checksum, 2); //uint16_t
+
+	pckt->writeData(26, &l_ip, 4); //local ip
+	pckt->writeData(30, &r_ip, 4); //remote ip
+	pckt->writeData(34, hdr, 20); //header
+}
 
 }
