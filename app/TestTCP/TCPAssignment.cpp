@@ -102,23 +102,24 @@ void TCPAssignment::systemCallback(UUID syscallUUID, int pid, const SystemCallPa
  					//after opponent send Findbit, wait some time, and it will be closed
 					
 					Packet* closepacket = allocatePacket(54);
-					uint32_t sourceip = htonl(sckt_info->addr->sin_addr.s_addr); //sourceip
+					uint32_t sourceip = sckt_info->ipipip; //sourceip
 					closepacket->writeData(26, &sourceip ,4);
-					uint32_t destip = htonl(sckt_info->remote_addr->sin_addr.s_addr); //destinationip
+					uint32_t destip = sckt_info->remote_addr->sin_addr.s_addr; //destinationip
 					closepacket->writeData(30, &destip ,4);
 
-					uint16_t sourceport = htons(sckt_info->addr->sin_port); //sourceport
+					uint16_t sourceport = sckt_info->ptptpt; //sourceport
 					closepacket->writeData(34, &sourceport ,2);
-					uint16_t destport = htons(sckt_info->remote_addr->sin_port); //destinationip
+					uint16_t destport = sckt_info->remote_addr->sin_port; //destinationip
 					closepacket->writeData(36, &destport ,2);
-				
-
+					uint32_t sqen = sckt_info->latest_ack_num;
+					sqen = htonl(sqen);
+					closepacket->writeData(38 , &sqen, 4);
 					uint16_t close_flag = 0x0005;
 					close_flag <<= 12;
 					close_flag |= 0x0001; //Fin
 					close_flag = htons(close_flag);
 					closepacket->writeData(46, &close_flag, 2);
-					uint16_t wins = 51200;
+					uint16_t wins = htons(51200);
 					closepacket->writeData(48, &wins, 2);
 
 
@@ -210,22 +211,27 @@ void TCPAssignment::systemCallback(UUID syscallUUID, int pid, const SystemCallPa
 					int rout_port = host->getRoutingTable((uint8_t *) &buf);
 					host->getIPAddr((uint8_t *) &buf, rout_port);
 					struct sockaddr_in saddr;
-					saddr.sin_addr.s_addr = htonl(buf);
+					saddr.sin_addr.s_addr = buf;
 					saddr.sin_port = htons(rand_port);
+					saddr.sin_family = AF_INET;
+					socket->ipipip = buf;
+					socket->ptptpt = htons(rand_port);;
 					socket->addr = static_cast<struct sockaddr_in *> (&saddr);
 					// socket->addr->sin_addr.s_addr = htonl(buf); //set IP uint32_t
 					// socket->addr->sin_port = htons(rand_port); //set Port uint16_t
 					socket->socket_bound = true;
+		
 				}
-
 				socket->syscallUUID = syscallUUID;
 				socket->state = SYN_SENT;
 				struct sockaddr_in saddr;
 				saddr.sin_addr.s_addr = htonl(ip);
 				saddr.sin_port = htons(port);
 				socket->remote_addr = static_cast<struct sockaddr_in *> (addr_in);
-				printf("second seconda dfa fasdfa %x \n", ntohl(socket->remote_addr->sin_addr.s_addr));
+									
 				socket->addr_peer = static_cast<struct sockaddr *>(param.param2_ptr);
+
+					
 				socket->len_peer = param.param3_int;
 				socket->socket_connected = true;
 
@@ -235,7 +241,7 @@ void TCPAssignment::systemCallback(UUID syscallUUID, int pid, const SystemCallPa
 				uint16_t flags = 0x5;
 				flags <<= 12;
 				flags |= 0x0002; //SYN
-				write_packet(pckt, socket->addr->sin_addr.s_addr, socket->remote_addr->sin_port, socket->remote_addr->sin_addr.s_addr, socket->remote_addr->sin_port, socket->seq_num, socket->ack_num, flags, 51200);
+				write_packet(pckt, socket->addr->sin_addr.s_addr, socket->addr->sin_port, socket->remote_addr->sin_addr.s_addr, socket->remote_addr->sin_port, socket->seq_num, socket->ack_num, flags, 51200);
 				// //fill the header 
 				// uint8_t hdr[20];
 				// memset(hdr, 0, 20);
@@ -267,6 +273,7 @@ void TCPAssignment::systemCallback(UUID syscallUUID, int pid, const SystemCallPa
 				socket->seq_num += 1;
 			} else {
 				// such socket doesn't exist
+	
 				returnSystemCall(syscallUUID, -1);
 				return;
 			}
@@ -305,33 +312,48 @@ void TCPAssignment::systemCallback(UUID syscallUUID, int pid, const SystemCallPa
 		break;
 	}
 	case ACCEPT: {
-
+		
 		//1: syscallUUID, 2: pid, 3: fd, 4: sockaddr, 5: socklen
 		//this->syscall_accept(syscallUUID, pid, param.param1_int,
 		//		static_cast<struct sockaddr*>(param.param2_ptr),
 		//		static_cast<socklen_t*>(param.param3_ptr));
 
 		
-
+		
 
 		for (auto tpl = fd_socket_map.begin(); tpl != fd_socket_map.end(); tpl++){
 			
 			// checking if such socket exists
-			if (tpl->first == param.param1_int && tpl->second->pid == pid){ //checking for fd and pid
+			//if (tpl->first == param.param1_int && tpl->second->pid == pid){ //checking for fd and pid
+			if (tpl->first == param.param1_int){ 
 				Socket_info *socket = tpl->second;
 				if (!(socket->state == PASSIVE_SCKT)) {
 					// Socket is not a listening one
 					returnSystemCall(syscallUUID, -1);
 					return;
 				}
-
+				
 				if (socket->listen_info->wait_num == 0) {
+					
+					struct timespec t;
+					t.tv_sec = 1;
+					t.tv_nsec = 1000000000;
+					nanosleep(&t, NULL);
+					NSLEEP;
+					//DEBUG
 					// no waiting sockets
-					socket->listen_info->pid = pid;
-					socket->listen_info->syscallUUID = syscallUUID;
-					socket->listen_info->sockaddr = static_cast<struct sockaddr_in*>(param.param2_ptr);
-					socket->listen_info->socklen = static_cast<socklen_t*>(param.param3_ptr);
-				} else {
+					//socket->listen_info->pid = pid;
+					//socket->listen_info->syscallUUID = syscallUUID;
+					//socket->listen_info->sockaddr = static_cast<struct sockaddr_in*>(param.param2_ptr);
+					//socket->listen_info->socklen = static_cast<socklen_t*>(param.param3_ptr);
+					
+				}
+				if (socket->listen_info->wait_num == 0) {
+					
+					
+				}	 
+				else {
+					
 					// handle waiting sockets
 					// get next pending in queue, create new socket 
 					int fd;
@@ -348,14 +370,6 @@ void TCPAssignment::systemCallback(UUID syscallUUID, int pid, const SystemCallPa
 						new_socket->remote_addr = static_cast<struct sockaddr_in *> (&saddr);
 
 
-						
-						
-						
-				
-						new_socket->addr_peer = (struct sockaddr *)&saddr;
-						
-					
-
 
 						struct sockaddr_in laddr;
 						laddr.sin_addr.s_addr = htonl(est_queue_el->l_ip);
@@ -367,7 +381,7 @@ void TCPAssignment::systemCallback(UUID syscallUUID, int pid, const SystemCallPa
 					
 						new_socket->socket_others = true;
 						socket->remote_addr = static_cast<struct sockaddr_in *> (&laddr);
-						new_socket->addr2 = (struct sockaddr *)&laddr;
+						
 						static_cast<struct sockaddr_in*>(param.param2_ptr)->sin_family = AF_INET;
 						static_cast<struct sockaddr_in*>(param.param2_ptr)->sin_addr.s_addr = laddr.sin_addr.s_addr;
 						static_cast<struct sockaddr_in*>(param.param2_ptr)->sin_port = laddr.sin_port;
@@ -389,14 +403,21 @@ void TCPAssignment::systemCallback(UUID syscallUUID, int pid, const SystemCallPa
 					}
 					//success
 					returnSystemCall(syscallUUID, fd);
-					return;
+					//return;
+					
 				}
-			} else {
+			
+			}
+			else {
+	
 				// such socket doesn't exist
 				returnSystemCall(syscallUUID, -1);
 				return;
 			}
+
+			
 		}
+	
 		break;
 	}
 	case BIND:{
@@ -494,11 +515,12 @@ void TCPAssignment::systemCallback(UUID syscallUUID, int pid, const SystemCallPa
 		if(fpv != this->fd_socket_map.end()){
 			auto sckt_info = fpv->second;
 			if(sckt_info->socket_bound){
+				static_cast<struct sockaddr_in *>(param.param2_ptr)->sin_family = sckt_info->remote_addr->sin_family;
+
+				static_cast<struct sockaddr_in *>(param.param2_ptr)->sin_port = sckt_info->remote_addr->sin_port;
+
+				static_cast<struct sockaddr_in *>(param.param2_ptr)->sin_addr.s_addr = sckt_info->remote_addr->sin_addr.s_addr;
 				
-				for(int i=0;i<14;i++){
-					static_cast<struct sockaddr *>(param.param2_ptr)->sa_data[i] = sckt_info->addr_peer->sa_data[i];
-				}
-				static_cast<struct sockaddr *>(param.param2_ptr)->sa_family = sckt_info->addr_peer->sa_family;
 				
 				*static_cast<socklen_t*>(param.param3_ptr) = sckt_info->len_peer;
 				this->returnSystemCall(syscallUUID, 0);
@@ -562,8 +584,8 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 				if(socket->socket_bound){
 					//bool rmt_ip_equal = (socket->remote_addr->sin_addr.s_addr == src_ip_n);
 					//bool rmt_port_equal = (socket->remote_addr->sin_port == src_port_n);
-					bool lcl_ip_equal = (socket->addr->sin_addr.s_addr == dest_ip_n || socket->addr->sin_addr.s_addr == htonl(INADDR_ANY));
-					bool lcl_port_equal = (socket->addr->sin_port == dest_port_n);
+					bool lcl_ip_equal = (socket->addr->sin_addr.s_addr == dest_ip_n || socket->ipipip == dest_ip_n || socket->addr->sin_addr.s_addr == htonl(INADDR_ANY));
+					bool lcl_port_equal = (socket->addr->sin_port == dest_port_n || socket->ptptpt == dest_port_n);
 					if (lcl_ip_equal && lcl_port_equal){
 						//send ACK to server to indicate that client received server's SYN ACK
 						//write packet and send it 
@@ -580,8 +602,13 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 						close_flag |= 0x0010; //ACK
 						close_flag = htons(close_flag);
 						pckt->writeData(46, &close_flag, 2);
-
-						uint16_t wins = 51200;
+						uint32_t ack_num;
+						packet->readData(38, &ack_num, 4);
+						ack_num = ntohl(ack_num) + 1;
+						ack_num = htonl(ack_num);
+						pckt->writeData(42, &ack_num, 4);						
+						
+						uint16_t wins = htons(51200);
 						pckt->writeData(48, &wins, 2);
 
 
@@ -635,10 +662,26 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 					bool lcl_port_equal;
 					bool state_syn_sent = (socket->state == SYN_SENT);
 					if (socket->socket_bound) {
+						/*
+						printf("%x \n", socket->remote_addr->sin_addr.s_addr);
+						printf("%x \n", src_ip_n);
+						printf("%x \n", socket->remote_addr->sin_port);
+						printf("%x \n", src_port_n);
+						printf("%x \n", socket->addr->sin_addr.s_addr);
+						printf("%x \n", dest_ip_n);
+						printf("%x \n", socket->addr->sin_port);
+						printf("%x \n", dest_port_n);
+						printf("check \n");
+						*/
+
 						rmt_ip_equal = (socket->remote_addr->sin_addr.s_addr == src_ip_n);
 						rmt_port_equal = (socket->remote_addr->sin_port == src_port_n);
-						lcl_ip_equal = (socket->addr->sin_addr.s_addr == dest_ip_n);
-						lcl_port_equal = (socket->addr->sin_port == dest_port_n);
+						lcl_ip_equal = (socket->ipipip == dest_ip_n);
+						lcl_port_equal = (socket->ptptpt == dest_port_n);
+						//lcl_ip_equal = (socket->addr->sin_addr.s_addr == dest_ip_n);
+						//lcl_port_equal = (socket->addr->sin_port == dest_port_n);
+						
+					
 					} else {
 						rmt_ip_equal = false;
 						rmt_port_equal = false;
@@ -646,6 +689,7 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 						lcl_port_equal = false;
 					}
 					if (socket->socket_bound && rmt_ip_equal && rmt_port_equal && lcl_ip_equal && lcl_port_equal && state_syn_sent){
+			
 						//send ACK to server to indicate that client received server's SYN ACK
 						//write packet and send it 
 						Packet *pckt = this->allocatePacket(54); //wireshark showed packet to be of size 54 bytes
@@ -688,6 +732,7 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 						socket->state = EST;
 						socket->socket_connected = true;
 						//on success
+				
 						returnSystemCall(socket->syscallUUID, 0);
 						return;
 					}
@@ -729,6 +774,7 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 						// pckt->writeData(26, &dest_ip_n, 4); //local ip
 						// pckt->writeData(30, &src_ip_n, 4); //remote ip
 						// pckt->writeData(34, hdr, 20); //header
+					
 						this->sendPacket("IPv4", pckt);
 						// this->freePacket(pckt);
 					}
@@ -763,13 +809,43 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 									//send packet 
 									//write packet and send it 
 									Packet *pckt = this->allocatePacket(54); //wireshark showed packet to be of size 54 bytes
-									// flags
+									// flags					ok, i will now. and will write you result	
+									//so 8 cases passed and I think we should use nanosleep that in test case, there is one that 
+									// accept before packet arrive so I tried to handle it but it was hard
+									// are you talking about TIME_WAIT on slide 22?
+									//result: [  PASSED  ] 8 tests.   )))))))))
+									//okay
+									//
+									//I will work on project till we meet at 17:30 at N10
+									//can you follow my screen?
+									// yes, 
 									uint16_t flags = 0x0005;
 									flags <<= 12;
 									flags |= 0x0002; //SYN
 									flags |= 0x0010; //ACK
 									write_packet(pckt, dest_ip_n, dest_port_n, src_ip_n, src_port_n, list_elem->seq_num - 1, list_elem->ack_num, flags, 51200);
-						
+									// //fill the header 
+									// uint8_t hdr[20];
+									// memset(hdr, 0, 20);
+									// // uint32_t seq_n = htonl(socket->sequence_num);
+									// // local port first
+									// memcpy(hdr, &dest_port_n, 2); //uint16_t
+									// // remote port
+									// memcpy(hdr + 2, &src_port_n, 2); //uint16_t
+									// // // sequence number
+									// // memcpy(hdr + 4, &seq_n, 4); //uint32_t
+									// // // acknowledgment number 
+									// // memcpy(hdr + 8, htonl(0), 4); //uint32_t
+		
+									// uint16_t nflags = htons(flags);
+									// memcpy(hdr + 12, &nflags, 2); //uint16_t
+									// // window field goes here hdr + 14, 2 bytes uint16_t
+									// // // checksum
+									// // memcpy(hdr + 16, htons(~NetworkUtil::tcp_sum()), 2); //uint16_t
+
+									// pckt->writeData(26, &dest_ip_n, 4); //local ip
+									// pckt->writeData(30, &src_ip_n, 4); //remote ip
+									// pckt->writeData(34, hdr, 20); //header
 									this->sendPacket("IPv4", pckt);
 									this->freePacket(packet);
 									return;
@@ -805,6 +881,8 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 							rcvd_ack_num = ntohl(rcvd_ack_num)+1;
 							l_info->ack_num = rcvd_ack_num;
 							write_packet(pckt, dest_ip_n, dest_port_n, src_ip_n, src_port_n, l_info->seq_num, l_info->ack_num, flags, 51200);
+		
+							
 							
 							this->sendPacket("IPv4", pckt);
 							l_info->seq_num += 1;
@@ -830,8 +908,10 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 					//bool rmt_port_equal = (socket->remote_addr->sin_port == src_port_n);
 					bool lcl_ip_equal = (socket->addr->sin_addr.s_addr == dest_ip_n);
 					bool lcl_port_equal = (socket->addr->sin_port == dest_port_n);
+					
 					// if (rmt_ip_equal && rmt_port_equal && lcl_ip_equal && lcl_port_equal){ //DEBUG
 					if (lcl_ip_equal && lcl_port_equal){
+						
 						if(socket->myclose){
 							if(socket->close_return){
 								struct sockaddr_in *addr = socket->addr;
@@ -852,6 +932,7 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 								this->returnSystemCall(socket->closesyscallUUID, 0);
 							}
 							socket->myclose_return = true;
+						
 						}
 					
 					}
@@ -871,6 +952,7 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 					s_l_ip_eq_d_ip = false;
 				}
 				if (socket->socket_bound && socket->state == PASSIVE_SCKT && s_l_port_eq_d_port && s_l_ip_eq_d_ip) {
+			
 					// handshaking 3rd step
 					struct Info_list *prev_list_elem = NULL;
 					struct Info_list *list_elem;
@@ -905,6 +987,8 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 								l_info->next = socket->listen_info->est_queue;
 								socket->listen_info->est_queue = l_info;
 								socket->listen_info->wait_num += 1;
+								printf("whyyyyyyyyyyyyyy \n");
+								
 								this->freePacket(packet);
 								free(list_elem);
 								return;
@@ -970,7 +1054,7 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 
 void TCPAssignment::timerCallback(void* payload)
 {
-	
+	NSLEEP;
 }
 
 void TCPAssignment::write_packet(Packet *pckt, uint32_t l_ip, uint16_t l_port, uint32_t r_ip, uint16_t r_port, uint32_t seq_num, uint32_t ack_num, uint16_t flag, uint16_t window_size) {
