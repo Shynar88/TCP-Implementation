@@ -40,6 +40,7 @@ protected:
 protected:
 	void E_Main()
 	{
+		printf("first main");
 		int server_socket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
 		struct sockaddr_in addr;
 		socklen_t len = sizeof(addr);
@@ -172,7 +173,7 @@ protected:
 protected:
 	void E_Main()
 	{
-
+		printf("second main");
 		long connect_time = atol(env["CONNECT_TIME"].c_str());
 		usleep(connect_time);
 

@@ -83,8 +83,10 @@ public:
 			// uint32_t sequence_num;
 			struct sockaddr_in* remote_addr;
 			struct sockaddr_in* addr;
-			struct sockaddr* addr2;
-			struct sockaddr* addr_peer;
+			struct sockaddr_in addr_help;
+			
+			struct sockaddr_in remote_addr_help;
+			
 
 			uint32_t ipipip;
 			uint16_t ptptpt;
