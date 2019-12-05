@@ -40,7 +40,6 @@ protected:
 protected:
 	void E_Main()
 	{
-		printf("first main");
 		int server_socket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
 		struct sockaddr_in addr;
 		socklen_t len = sizeof(addr);
@@ -173,7 +172,6 @@ protected:
 protected:
 	void E_Main()
 	{
-		printf("second main");
 		long connect_time = atol(env["CONNECT_TIME"].c_str());
 		usleep(connect_time);
 
@@ -181,14 +179,12 @@ protected:
 		struct sockaddr_in addr;
 		socklen_t len = sizeof(addr);
 		memset(&addr, 0, len);
-
 		addr.sin_family = AF_INET;
 		addr.sin_addr.s_addr = inet_addr(env["CONNECT_ADDR"].c_str());
 		addr.sin_port = htons(atoi(env["CONNECT_PORT"].c_str()));
 
 		int ret = connect(client_socket, (struct sockaddr*)&addr, len);
 		EXPECT_GE(ret, 0);
-
 		struct sockaddr_in temp_addr;
 		socklen_t temp_len = sizeof(temp_addr);
 		ret = getpeername(client_socket, (struct sockaddr*)&temp_addr, &temp_len);
@@ -198,7 +194,6 @@ protected:
 		EXPECT_EQ(addr.sin_port, temp_addr.sin_port);
 
 		long start_time = atol(env["START_TIME"].c_str());
-
 		struct timeval tv;
 		ret = gettimeofday(&tv, 0);
 		EXPECT_EQ(ret, 0);
@@ -213,7 +208,6 @@ protected:
 		int buffer_size = atoi(env["BUFFER_SIZE"].c_str());
 		int loop_count = atoi(env["LOOP_COUNT"].c_str());
 		long expect_size = atoi(env["EXPECT_SIZE"].c_str());
-
 		uint8_t* send_buffer = (uint8_t*)malloc(buffer_size);
 		uint8_t* recv_buffer = (uint8_t*)malloc(buffer_size);
 
@@ -224,7 +218,7 @@ protected:
 		{
 			for(int k=0; k<buffer_size; k++)
 				send_buffer[k] = rand_r(&seed) & 0xFF;
-
+			
 			if(is_send)
 			{
 				int remaining = buffer_size;
@@ -262,7 +256,6 @@ protected:
 				if(read_byte < 0)
 					break;
 			}
-
 			loop++;
 			if(loop_count != 0 && loop_count <= loop)
 				break;
@@ -270,7 +263,6 @@ protected:
 
 		free(send_buffer);
 		free(recv_buffer);
-
 		EXPECT_EQ(expect_size, total_size);
 
 		close(client_socket);

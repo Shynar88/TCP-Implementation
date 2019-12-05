@@ -76,6 +76,29 @@ public:
 			Info_list *est_queue; 
 	};
 
+	struct payload_list {
+		public:
+			uint16_t s;
+			uint32_t seq_num;
+			bool sent;
+			char *payload;
+			struct payload_list *next;
+			struct payload_list *prev;
+	};
+	struct Read_packet {
+		public:
+			Packet *pk;
+			UUID syscallUUID;
+			Read_packet *next;
+	};
+	struct Read_information {
+		public:
+			UUID syscallUUID;
+			int pid;
+			uint8_t *add;
+			int remain;
+			Read_information *next;
+	};
 	class Socket_info {
 		public:
 			int domain;
@@ -84,9 +107,24 @@ public:
 			struct sockaddr_in* remote_addr;
 			struct sockaddr_in* addr;
 			struct sockaddr_in addr_help;
-			
 			struct sockaddr_in remote_addr_help;
+
+			struct Read_information *read_info;
+			struct Read_packet *read_pk;
+			int read_called;
+			int read_packetarrived;			
+			int packet_left; // changed
 			
+
+			int write_sent;
+			int read_get;
+			int this_turn;
+
+
+			uint32_t write_seq;
+			uint32_t write_ack;
+			int write_num;
+
 
 			uint32_t ipipip;
 			uint16_t ptptpt;
@@ -97,6 +135,8 @@ public:
 			bool socket_listen;
 			bool socket_bound;
 			bool socket_connected;
+			bool ack_received;
+
 			bool myclose;
 			bool close_return;
 			bool myclose_return;
@@ -112,6 +152,7 @@ public:
 			// uint32_t latest_expected_seq_num; // FIN's seq num sent
 			sct_state state;
 			struct Listen_info* listen_info;
+			struct payload_list* send_queue;
 	};
 	virtual void write_packet(Packet *packet, uint32_t l_ip, uint16_t l_port, uint32_t r_ip, uint16_t r_port, uint32_t seq_num, uint32_t ack_num, uint16_t flag, uint16_t window_size) final;
 	std::map<int, Socket_info *> fd_socket_map;
